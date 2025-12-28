@@ -73,3 +73,4 @@ DOFA-CLIP/
 
 # Test outputs
 tests/output/
+models_cache/
