@@ -65,7 +65,7 @@ class GradECLIP:
              print(f"Error: Could not find target layer for hooks.")
              return
              
-        print(f"GradECLIP: Hooking into {layer}")
+        # print(f"GradECLIP: Hooking into {layer}")
         
         # Hook for capturing activations (forward)
         h1 = layer.register_forward_hook(self._forward_hook)
@@ -113,6 +113,119 @@ class GradECLIP:
         """Capture gradients w.r.t. output."""
         self._gradients = grad_output[0]
 
+    def generate_gradcam(
+        self,
+        image: torch.Tensor,
+        text: str,
+        image_size: int = 384
+    ) -> np.ndarray:
+        """
+        Generate Grad-CAM Heatmap.
+        
+        Uses gradients to weight the contribution of each visual token feature channel
+        to the final similarity score.
+        """
+        # 1. Clear previous hooks state
+        self._activations = None
+        self._gradients = None
+        self.model.model.zero_grad() # Clear model gradients
+        
+        # 2. Forward Pass: Encode Image
+        # We must enable grad for this pass to trace back to the hooked layer
+        with torch.set_grad_enabled(True):
+            # Ensure image requires grad? Usually input doesn't need it, but intermediate layers do.
+            # But the model parameters are frozen usually? 
+            # We need to run forward pass, then backward.
+            
+            # Note: We need to use the wrapper API but ensure gradients flow.
+            # dofa_clip.encode_image wraps torch.no_grad() usually?
+            # Let's check dofa_clip.py again. 
+            # It uses `with torch.no_grad():` inside encode_image. 
+            # WE CANNOT USE wrapper.encode_image directly if it forces no_grad!
+            # We must manually call the model parts.
+            
+            # Manual Forward Trace similar to encode_image but with grad
+            if isinstance(image, np.ndarray):
+                 image = torch.from_numpy(image).to(self.wrapper.device)
+            if image.dim() == 4:
+                 pass
+            elif image.dim() == 3:
+                 image = image.unsqueeze(0)
+                 
+            # Wavelengths
+            try:
+                from config import sentinel2_bands
+                wvs = torch.tensor(sentinel2_bands.get_wavelength_tensor()).float().to(self.model.device) / 1000.0
+            except ImportError:
+                # Fallback if import fails? Should not happen if path set correctly
+                 wvs = None
+            
+            # Forward Visual
+            # We need to call embedding directly
+            # This relies on the hooks being active on 'trunk.norm' (which is inside visual.trunk)
+            image_emb = self.model.model.visual(image, wvs)
+            # visual returns (proj_emb, sfeats) if DOFA=True, or just proj_emb?
+            # Looking at timm_model code: returns (x, sfeats) if DOFA=True.
+            if isinstance(image_emb, tuple):
+                image_emb = image_emb[0]
+                
+            # Normalize
+            image_emb = image_emb / image_emb.norm(dim=-1, keepdim=True)
+            
+            # Encode Text (can remain no_grad usually, but we need graph to connect them? 
+            # No, text is distinct branch. We just need gradient w.r.t Image Emb only?
+            # Yes, score = dot(I, T). Gradient flows from Score -> I -> ... -> A
+            text_emb = self.wrapper.encode_text(text, normalize=True).detach()
+            
+            # 3. Compute Similarity (Score)
+            score = (image_emb * text_emb).sum()
+            
+            # 4. Backward Pass
+            score.backward()
+            
+            # 5. Get Activations and Gradients from Hooks
+            # Shape: (B, N_tokens, D_features)
+            activations = self._activations
+            gradients = self._gradients
+            
+            if activations is None or gradients is None:
+                print("Error: Hooks did not capture data. Check target layer name.")
+                return np.zeros((image_size, image_size))
+            
+            # 6. Compute Weights (Global Average Pooling of Gradients over spatial dims)
+            # A, G are (1, N, D).
+            # We pool over N (dim 1) to get weight for each channel D.
+            weights = torch.mean(gradients, dim=1, keepdim=True) # (1, 1, D)
+            
+            # 7. Weighted Sum
+            # (1, N, D) * (1, 1, D) -> (1, N, D) --sum-> (1, N)
+            cam = (weights * activations).sum(dim=2) # (1, N)
+            
+            # 8. ReLU
+            cam = F.relu(cam)
+            
+            # 9. Reshape and Normalize
+            num_tokens = cam.shape[1]
+            grid_size = int(np.sqrt(num_tokens))
+            
+            if grid_size * grid_size != num_tokens:
+                 # Handle CLS token removal if needed
+                 if int(np.sqrt(num_tokens-1))**2 == num_tokens-1:
+                     cam = cam[:, 1:]
+                     grid_size = int(np.sqrt(num_tokens-1))
+            
+            cam = cam.reshape(1, 1, grid_size, grid_size)
+            
+            # Upsample
+            cam = F.interpolate(cam, size=(image_size, image_size), mode='bilinear', align_corners=False)
+            
+            # Normalize (0-1) for visualization
+            cam = cam - cam.min()
+            if cam.max() > 0:
+                cam = cam / cam.max()
+                
+            return cam.squeeze().detach().cpu().numpy()
+
     def generate_similarity_map(
         self,
         image: torch.Tensor,
@@ -132,13 +245,13 @@ class GradECLIP:
         # Output: (1, N_tokens, D)
         # N_tokens is usually 14x14 = 196 (for SigLIP 384/14) or similar.
         visual_tokens = self.wrapper.get_visual_tokens(image, normalize=True)
-        print(f"[DEBUG XAI] visual_tokens shape: {visual_tokens.shape}")
+        # print(f"[DEBUG XAI] visual_tokens shape: {visual_tokens.shape}")
         
         # 3. Compute Similarity Map
         # (1, N, D) * (1, D) -> (1, N, D) -> sum(dim=-1) -> (1, N)
         # Efficient: Matmul (1, N, D) @ (1, D, 1) -> (1, N, 1)
         sim_map = torch.matmul(visual_tokens, text_emb.T).squeeze(-1) # (1, N)
-        print(f"[DEBUG XAI] sim_map raw shape: {sim_map.shape}")
+        # print(f"[DEBUG XAI] sim_map raw shape: {sim_map.shape}")
         
         # 4. Reshape to Grid
         num_tokens = sim_map.shape[1]
@@ -202,7 +315,7 @@ def generate_explanation(
     image_size: int = 384
 ) -> np.ndarray:
     """
-    High-level explanation function.
+    High-level explanation function using Grad-CAM.
     """
     # Prepare image tensor
     if isinstance(image, np.ndarray):
@@ -214,13 +327,16 @@ def generate_explanation(
         image = image.unsqueeze(0)
         
     image = image.to(device or model_config.device)
+    image.requires_grad = True # Ensure input allows grad flow if needed (though we need param grad really)
     
-    # Use the new Similarity Map method (Grad-free)
-    # Re-using the GradECLIP class structure for convenience but could be standalone.
+    # Initialize GradECLIP
     explainer = GradECLIP(model_wrapper)
     
-    # Note: No hooks needed anymore!
-    heatmap = explainer.generate_similarity_map(image, text, image_size=image_size)
+    # Generate Grad-CAM
+    try:
+        heatmap = explainer.generate_gradcam(image, text, image_size=image_size)
+    finally:
+        explainer.remove_hooks()
     
     return heatmap
 

@@ -381,6 +381,9 @@ class DOFACLIPWrapper:
         
         # Preprocessing
         if isinstance(images, np.ndarray):
+            # Handle (H, W, C) -> (C, H, W)
+            if images.ndim == 3 and images.shape[2] <= 13: 
+                images = images.transpose(2, 0, 1)
             images = torch.from_numpy(images)
                 
         if images.dim() == 3:
@@ -426,7 +429,7 @@ class DOFACLIPWrapper:
                     features = None
             else:
                 features = None
-                
+                 
                 # Fallback 3: If hook failed, try old manual trunk navigation
                 if features is None:
                      try:

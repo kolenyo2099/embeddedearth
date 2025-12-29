@@ -71,6 +71,8 @@ Thumbs.db
 # DOFA-CLIP cloned repo (large)
 DOFA-CLIP/
 
-# Test outputs
-tests/output/
+# Test folder
+tests/
 models_cache/
+cache/
+data_cache/
