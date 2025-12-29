@@ -133,48 +133,30 @@ class GradECLIP:
         # 2. Forward Pass: Encode Image
         # We must enable grad for this pass to trace back to the hooked layer
         with torch.set_grad_enabled(True):
-            # Ensure image requires grad? Usually input doesn't need it, but intermediate layers do.
-            # But the model parameters are frozen usually? 
-            # We need to run forward pass, then backward.
-            
-            # Note: We need to use the wrapper API but ensure gradients flow.
-            # dofa_clip.encode_image wraps torch.no_grad() usually?
-            # Let's check dofa_clip.py again. 
-            # It uses `with torch.no_grad():` inside encode_image. 
-            # WE CANNOT USE wrapper.encode_image directly if it forces no_grad!
-            # We must manually call the model parts.
-            
-            # Manual Forward Trace similar to encode_image but with grad
-            if isinstance(image, np.ndarray):
-                 image = torch.from_numpy(image).to(self.wrapper.device)
-            if image.dim() == 4:
-                 pass
-            elif image.dim() == 3:
-                 image = image.unsqueeze(0)
+            # Preprocess using centralized logic (ensures consistency)
+            image_tensor = self.wrapper.preprocess_tensor(image, normalize=True)
+            if image_tensor.requires_grad is False:
+                image_tensor.requires_grad = True # Allow gradient flow if needed for input visualization, though we primarily need internal hooks
                  
             # Wavelengths
             try:
                 from config import sentinel2_bands
                 wvs = torch.tensor(sentinel2_bands.get_wavelength_tensor()).float().to(self.model.device) / 1000.0
             except ImportError:
-                # Fallback if import fails? Should not happen if path set correctly
                  wvs = None
             
-            # Forward Visual
-            # We need to call embedding directly
-            # This relies on the hooks being active on 'trunk.norm' (which is inside visual.trunk)
-            image_emb = self.model.model.visual(image, wvs)
-            # visual returns (proj_emb, sfeats) if DOFA=True, or just proj_emb?
-            # Looking at timm_model code: returns (x, sfeats) if DOFA=True.
-            if isinstance(image_emb, tuple):
-                image_emb = image_emb[0]
+            # Forward Visual TRUNK specifically (to bypass projection head issues and ensure DOFA-CLIP path)
+            # Expects (B, C, H, W) -> (Embedding, Intermediates) or Embedding
+            out = self.model.model.visual.trunk(image_tensor, wvs)
+            if isinstance(out, tuple):
+                image_emb = out[0]
+            else:
+                image_emb = out
                 
-            # Normalize
+            # Normalize embedding
             image_emb = image_emb / image_emb.norm(dim=-1, keepdim=True)
             
-            # Encode Text (can remain no_grad usually, but we need graph to connect them? 
-            # No, text is distinct branch. We just need gradient w.r.t Image Emb only?
-            # Yes, score = dot(I, T). Gradient flows from Score -> I -> ... -> A
+            # Encode Text
             text_emb = self.wrapper.encode_text(text, normalize=True).detach()
             
             # 3. Compute Similarity (Score)
@@ -184,37 +166,63 @@ class GradECLIP:
             score.backward()
             
             # 5. Get Activations and Gradients from Hooks
-            # Shape: (B, N_tokens, D_features)
             activations = self._activations
             gradients = self._gradients
             
             if activations is None or gradients is None:
-                print("Error: Hooks did not capture data. Check target layer name.")
+                # print("Error: Hooks did not capture data. Check target layer name.")
                 return np.zeros((image_size, image_size))
             
             # 6. Compute Weights (Global Average Pooling of Gradients over spatial dims)
-            # A, G are (1, N, D).
-            # We pool over N (dim 1) to get weight for each channel D.
             weights = torch.mean(gradients, dim=1, keepdim=True) # (1, 1, D)
             
             # 7. Weighted Sum
-            # (1, N, D) * (1, 1, D) -> (1, N, D) --sum-> (1, N)
             cam = (weights * activations).sum(dim=2) # (1, N)
             
             # 8. ReLU
             cam = F.relu(cam)
             
-            # 9. Reshape and Normalize
+            # 9. Reshape and Normalize with Robust Logic
             num_tokens = cam.shape[1]
-            grid_size = int(np.sqrt(num_tokens))
             
-            if grid_size * grid_size != num_tokens:
-                 # Handle CLS token removal if needed
-                 if int(np.sqrt(num_tokens-1))**2 == num_tokens-1:
-                     cam = cam[:, 1:]
-                     grid_size = int(np.sqrt(num_tokens-1))
+            # Try to infer grid size from model config if possible
+            grid_size = None
+            if hasattr(self.model.model.visual.trunk, 'patch_embed'):
+                 if hasattr(self.model.model.visual.trunk.patch_embed, 'grid_size'):
+                      g_h, g_w = self.model.model.visual.trunk.patch_embed.grid_size
+                      if isinstance(g_h, int): grid_size = g_h # assume square
+                      
+            # Fallback deduction
+            if grid_size is None:
+                 grid_size = int(np.sqrt(num_tokens))
             
-            cam = cam.reshape(1, 1, grid_size, grid_size)
+            # Check for perfect square
+            if grid_size * grid_size == num_tokens:
+                 # Perfect fit
+                 cam = cam.reshape(1, 1, grid_size, grid_size)
+            else:
+                 # Try removing CLS/Registers (usually at start or end?)
+                 # Standard ViT: CLS at 0
+                 # SigLIP: usually no CLS, just GAP.
+                 # DOFA: uses standard ViT trunk usually.
+                 
+                 # Logic: find largest square S*S <= num_tokens
+                 s = int(np.sqrt(num_tokens))
+                 
+                 if s * s == num_tokens - 1:
+                      # One extra token (CLS)
+                      cam = cam[:, 1:] # Drop first
+                      cam = cam.reshape(1, 1, s, s)
+                 elif s * s < num_tokens:
+                      # More extra tokens (registers?)
+                      # Or CLS + Distillation?
+                      # Assume Spatial tokens are LAST S*S tokens
+                      diff = num_tokens - (s*s)
+                      cam = cam[:, diff:]
+                      cam = cam.reshape(1, 1, s, s)
+                 else:
+                      # S*S > num_tokens? Impossible unless s was ceil, but we used int().
+                      return np.zeros((image_size, image_size))
             
             # Upsample
             cam = F.interpolate(cam, size=(image_size, image_size), mode='bilinear', align_corners=False)
@@ -234,72 +242,48 @@ class GradECLIP:
     ) -> np.ndarray:
         """
         Generate Token-Text Similarity Map (Non-Gradient).
-        
-        Computes the cosine similarity between the text embedding
-        and each visual patch token.
         """
         # 1. Encode Text
         text_emb = self.wrapper.encode_text(text, normalize=True) # (1, D)
         
         # 2. Get Visual Tokens (Pre-Pooled)
-        # Output: (1, N_tokens, D)
-        # N_tokens is usually 14x14 = 196 (for SigLIP 384/14) or similar.
+        # Note: get_visual_tokens now applies consistent preprocessing!
         visual_tokens = self.wrapper.get_visual_tokens(image, normalize=True)
-        # print(f"[DEBUG XAI] visual_tokens shape: {visual_tokens.shape}")
         
         # 3. Compute Similarity Map
-        # (1, N, D) * (1, D) -> (1, N, D) -> sum(dim=-1) -> (1, N)
-        # Efficient: Matmul (1, N, D) @ (1, D, 1) -> (1, N, 1)
         sim_map = torch.matmul(visual_tokens, text_emb.T).squeeze(-1) # (1, N)
-        # print(f"[DEBUG XAI] sim_map raw shape: {sim_map.shape}")
         
-        # 4. Reshape to Grid
+        # 4. Reshape to Grid (Robust)
         num_tokens = sim_map.shape[1]
         
-        # Check for CLS token? SigLIP usually doesn't have one (MAP/GAP).
-        # OpenCLIP SigLIP uses Global Average Pooling usually, so tokens are pure spatial.
-        # But if there IS a CLS token or Register, we need to handle it.
-        # Simple check: is sqrt integer?
-        
+        # Try to infer grid
         grid_h = int(np.sqrt(num_tokens))
-        if grid_h * grid_h != num_tokens:
-             # Try removing one token (CLS)
-             if int(np.sqrt(num_tokens - 1))**2 == num_tokens - 1:
-                 # Has CLS, remove it (usually index 0? or last?)
-                 # Standard ViT has CLS at 0
-                 sim_map = sim_map[:, 1:]
-                 grid_h = int(np.sqrt(num_tokens - 1))
-             else:
-                 print(f"[WARN] Unknown token count {num_tokens} for square grid.")
-                 return np.zeros((image_size, image_size))
         
-        # Reshape (1, H, W)
-        sim_map = sim_map.reshape(1, 1, grid_h, grid_h)
+        if grid_h * grid_h == num_tokens:
+             sim_map = sim_map.reshape(1, 1, grid_h, grid_h)
+        else:
+             # Handle CLS/Registers
+             s = int(np.sqrt(num_tokens))
+             if s * s == num_tokens - 1:
+                  sim_map = sim_map[:, 1:]
+                  sim_map = sim_map.reshape(1, 1, s, s)
+             elif s * s < num_tokens:
+                  # Assume spatial at end
+                  diff = num_tokens - (s*s)
+                  sim_map = sim_map[:, diff:]
+                  sim_map = sim_map.reshape(1, 1, s, s)
+             else:
+                  return np.zeros((image_size, image_size))
         
         # 5. Normalize Map for Visualization
-        # Clip negative correlations? Or just Min-Max?
-        # User wants "contribution to match".
-        # Typically similarity is [-1, 1].
-        # We can map [-1, 1] to [0, 1] strictly? 
-        # Or just min-max of the specific map to highlight RELATIVE importance?
-        # Standard approach: ReLU (keep only positive) -> MinMax.
-        # Or just MinMax.
-        
-        # Let's keep negatives as zero (irrelevant/anti-correlated)
         sim_map = F.relu(sim_map)
         
-        # Min-Max
         map_min, map_max = sim_map.min(), sim_map.max()
         range_val = map_max - map_min
-        
-        # Ghost Pattern Fix:
-        # If delta is tiny, we are just amplifying noise/bias.
-        # Threshold: if range is < 0.01 (1% similarity difference), it's noise.
         
         if range_val > 0.01:
              sim_map = (sim_map - map_min) / range_val
         else:
-             # Return empty/flat heatmap if no meaningful contrast
              return np.zeros((image_size, image_size))
         
         # 6. Upsample

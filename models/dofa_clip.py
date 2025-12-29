@@ -280,16 +280,27 @@ class DOFACLIPWrapper:
             
         return text_embeds
 
-    def encode_image(
-        self, 
-        images: Union[np.ndarray, torch.Tensor], 
-        wavelengths: Optional[torch.Tensor] = None, # Kept for API compatibility, unused by SigLIP
+    def preprocess_tensor(
+        self,
+        images: Union[np.ndarray, torch.Tensor],
         normalize: bool = True
     ) -> torch.Tensor:
-        if not self._loaded: self._load_model()
+        """
+        Centralized tensor preprocessing (Resize + Normalize).
         
-        # Preprocessing
+        Args:
+            images: Input images (numpy or tensor).
+            normalize: Whether to apply normalization.
+            
+        Returns:
+            Preprocessed tensor ready for model input.
+        """
         if isinstance(images, np.ndarray):
+            # Handle (H, W, C) -> (C, H, W) if needed
+            # For 3D arrays (H, W, C) where C <= 13 (channels), transpose
+            # Be careful not to transpose (B, H, W)
+            if images.ndim == 3 and images.shape[2] <= 13: 
+                images = images.transpose(2, 0, 1)
             images = torch.from_numpy(images)
                 
         if images.dim() == 3:
@@ -297,12 +308,8 @@ class DOFACLIPWrapper:
             
         images = images.to(self.device, dtype=torch.float32)
         
-        # Check if we need to resize
-        # The model expects specific input size (defined in config, usually 224 or 384)
-        # Note: SigLIP might expect 384
-        # We'll rely on our pipeline to have tiled it correctly, or interpolate.
-        
-        target_size = 384 # Or read from model config?
+        # Resize if needed
+        target_size = 384
         if hasattr(self._model.visual, 'image_size'):
              target_size = self._model.visual.image_size
              if isinstance(target_size, tuple): target_size = target_size[0]
@@ -312,42 +319,37 @@ class DOFACLIPWrapper:
                 images, size=(target_size, target_size), mode='bilinear'
             )
             
-        # NORMALIZE INPUTS: Explicitly apply ImageNet mean/std if provided
-        # The model expects normalized range [-2, 2], but we are feeding [0, 1].
-        # We must normalize manually since we skipped the standard transform.
-        device = images.device
-        dtype = images.dtype
-        mean = torch.tensor([0.48145466, 0.4578275, 0.40821073]).to(device, dtype).view(1, 3, 1, 1)
-        std = torch.tensor([0.26862954, 0.26130258, 0.27577711]).to(device, dtype).view(1, 3, 1, 1)
+        if normalize:
+            # NORMALIZE INPUTS: Explicitly apply ImageNet mean/std
+            device = images.device
+            dtype = images.dtype
+            
+            # Standard ImageNet stats
+            mean = torch.tensor([0.48145466, 0.4578275, 0.40821073]).to(device, dtype).view(1, 3, 1, 1)
+            std = torch.tensor([0.26862954, 0.26130258, 0.27577711]).to(device, dtype).view(1, 3, 1, 1)
+            
+            if images.shape[1] == 3:
+                 images = (images - mean) / std
+            else:
+                 # Multispectral Normalization heuristic
+                 C = images.shape[1]
+                 mean_full = torch.ones(1, C, 1, 1, device=device, dtype=dtype) * 0.45 
+                 std_full = torch.ones(1, C, 1, 1, device=device, dtype=dtype) * 0.27 
+                 images = (images - mean_full) / std_full
+                 
+        return images
+
+    def encode_image(
+        self, 
+        images: Union[np.ndarray, torch.Tensor], 
+        wavelengths: Optional[torch.Tensor] = None, 
+        normalize: bool = True
+    ) -> torch.Tensor:
+        if not self._loaded: self._load_model()
         
-        # Determine if we need to expand mean/std for multispectral
-        # DOFA assumes standard normalization on the bands? Or per-band?
-        # Usually we apply RGB normalization to the first 3 bands, and similar for others?
-        # Or just 0-1?
-        # Re-reading DOFA paper/code: DOFA takes raw inputs?
-        # But here we are using a CLIP wrapper.
-        # Let's perform standard normalization broadcasting it to the first 3 channels 
-        # and reusing it for others? Or just centering.
-        # SAFE BET: Normalize.
-        
-        if images.shape[1] == 3:
-             images = (images - mean) / std
-        else:
-             # Multispectral Normalization heuristic
-             # Create mean/std tensors for C channels
-             C = images.shape[1]
-             mean_full = torch.ones(1, C, 1, 1, device=device, dtype=dtype) * 0.45 # Average brightness
-             std_full = torch.ones(1, C, 1, 1, device=device, dtype=dtype) * 0.27 # Average contrast
-             
-             # Overwrite RGB bands (assuming first 3 are RGB-like or similar magnitude)
-             # S2: B2, B3, B4, B8... (Blue, Green, Red, NIR)
-             # Wait, strict order matters.
-             # But generally 0.45/0.27 is a safe "global" norm for 0-1 data to get to -2,2 range.
-             # Ideally we use per-band stats but we don't have them handy.
-             # This is infinitely better than No Normalization.
-             
-             images = (images - mean_full) / std_full 
-             
+        # Use centralized preprocessing
+        images = self.preprocess_tensor(images, normalize=True)
+              
         # Get default wavelengths if not provided
         if wavelengths is None:
             wavelengths = torch.tensor(
@@ -379,28 +381,8 @@ class DOFACLIPWrapper:
         """
         if not self._loaded: self._load_model()
         
-        # Preprocessing
-        if isinstance(images, np.ndarray):
-            # Handle (H, W, C) -> (C, H, W)
-            if images.ndim == 3 and images.shape[2] <= 13: 
-                images = images.transpose(2, 0, 1)
-            images = torch.from_numpy(images)
-                
-        if images.dim() == 3:
-            images = images.unsqueeze(0)
-            
-        images = images.to(self.device, dtype=torch.float32)
-        
-        # Resize if needed
-        target_size = 384
-        if hasattr(self._model.visual, 'image_size'):
-             target_size = self._model.visual.image_size
-             if isinstance(target_size, tuple): target_size = target_size[0]
-
-        if images.shape[-1] != target_size or images.shape[-2] != target_size:
-            images = torch.nn.functional.interpolate(
-                images, size=(target_size, target_size), mode='bilinear'
-            )
+        # Use centralized preprocessing
+        images = self.preprocess_tensor(images, normalize=True)
             
         if wavelengths is None:
             wavelengths = torch.tensor(
@@ -409,46 +391,23 @@ class DOFACLIPWrapper:
              
         with torch.no_grad():
             # Use official DOFA-CLIP API: model.visual.trunk(image, wvs)
-            # Returns tuple: (pooled_output, intermediate_features)
             out = self._model.visual.trunk(images, wavelengths)
             
             if isinstance(out, tuple) and len(out) > 1:
                 # out[1] is a list of intermediate features
-                # The last one before pooling contains the patch tokens
                 intermediate = out[1]
                 if isinstance(intermediate, list) and len(intermediate) > 0:
-                    # Get the last intermediate feature (usually the normalized tokens)
                     features = intermediate[-1]
-                    if isinstance(features, torch.Tensor) and features.dim() == 3:
-                        # Shape: (B, N_patches, D) or (B, D, N_patches)
-                        pass  # Good!
-                    else:
-                        # Fallback: try to reshape
-                        features = None
                 else:
                     features = None
             else:
                 features = None
                  
-                # Fallback 3: If hook failed, try old manual trunk navigation
-                if features is None:
-                     try:
-                        x = self._model.visual.trunk.patch_embed(images)
-                        x = self._model.visual.trunk._pos_embed(x)
-                        x = self._model.visual.trunk.norm_pre(x)
-                        x = self._model.visual.trunk.blocks(x)
-                        features = self._model.visual.trunk.norm(x)
-                     except:
-                        pass
-
         if features is None:
              raise RuntimeError("Could not extract visual tokens from model.")
              
         # Ensure (B, N, D)
         if features.dim() == 2:
-             # If we STILL have 2D, it means even the norm layer is returning pooled? Unlikely.
-             # Or maybe it's just a class token?
-             # Unsqueeze to (B, 1, D) as last resort
              features = features.unsqueeze(1)
 
         if normalize:
