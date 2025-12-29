@@ -1,1 +1,1 @@
-"""ElLocoGIS - Data Acquisition Module"""
+"""EmbeddedEarth - Data Acquisition Module"""

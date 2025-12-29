@@ -1,1 +1,1 @@
-"""ElLocoGIS - Vector Search Module"""
+"""EmbeddedEarth - Vector Search Module"""

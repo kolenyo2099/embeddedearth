@@ -1,1 +1,1 @@
-"""ElLocoGIS - Explainability (XAI) Module"""
+"""EmbeddedEarth - Explainability (XAI) Module"""

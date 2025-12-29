@@ -1,5 +1,5 @@
 """
-ElLocoGIS - Main Streamlit Application
+EmbeddedEarth - Main Streamlit Application
 
 AI-Driven Remote Sensing Semantic Search Engine
 
@@ -26,7 +26,6 @@ from app.accessibility import inject_accessibility_css, add_skip_link, announce_
 from app.components.search_form import render_search_form, validate_search_params
 from app.components.map_viewer import render_map_viewer
 from app.components.result_grid import render_result_grid, render_loading_state
-from pipeline.refinement import get_refiner
 
 
 def configure_page():
@@ -110,6 +109,14 @@ def render_sidebar():
                     st.rerun()
                 except Exception as e:
                     st.error(f"Connection failed: {e}")
+                    
+            with st.expander("❓ How to get a Project ID"):
+                st.markdown("""
+                1. Go to [Google Cloud Console](https://console.cloud.google.com).
+                2. Create a new project.
+                3. Search for **"Earth Engine API"** and enable it.
+                4. Copy the **Project ID** from the dashboard.
+                """)
         
         st.markdown("---")
         
@@ -251,59 +258,6 @@ def render_main_content():
     if st.session_state.search_results:
         results = st.session_state.search_results
         render_result_grid(results)
-        
-        # Stage 2: Semantic Refinement (After Results)
-        if results:
-             st.markdown("---")
-             with st.expander("✨ Advanced: Super-Resolution Refinement", expanded=False):
-                st.markdown("""
-                **Micro-Object Detection**:
-                1. Upscale top 20 candidate tiles by 4x (10m -> 2.5m).
-                2. Re-scan using an RGB-Optimized model (SigLIP).
-                """)
-                
-                # New Prompt for Refinement
-                default_prompt = st.session_state.get('current_query', '')
-                refine_query = st.text_input(
-                    "Refinement Prompt (Be specific, e.g., 'white airplane', 'red roof house')",
-                    value=default_prompt,
-                    help="Describe the specific object you are looking for inside the candidate tiles."
-                )
-                
-                if st.button("🚀 Run Semantic Refinement (Slow)"):
-                     with st.spinner("Initializing Visual Cortex (SigLIP) & Super-Resolution (ESRGAN)..."):
-                         refiner = get_refiner()
-                         
-                     with st.spinner(f"Enhancing candidates & searching for '{refine_query}'..."):
-                         # Prepare candidates (idx, image, metadata)
-                         candidates = []
-                         # Filter out None images just in case
-                         valid_results = [r for r in results if r.get('image') is not None]
-                         
-                         for i, res in enumerate(valid_results[:20]): # Refine top 20 valid
-                             img = res['image'] # HWC RGB
-                             candidates.append((i, img, None))
-                             
-                         refined_results = refiner.refine_candidates(candidates, refine_query, top_k=20)
-                         
-                         # Format for grid
-                         display_refined = []
-                         for rr in refined_results:
-                             # Convert to (H, W, C) uint8 for display
-                             # rr.sub_tile.data is (C, H, W) float 0-1
-                             vis_img = rr.sub_tile.data.transpose(1, 2, 0)
-                             vis_img = (np.clip(vis_img, 0, 1) * 255).astype(np.uint8)
-                             
-                             display_refined.append({
-                                 'image': vis_img,
-                                 'score': rr.score,
-                                 'bounds': rr.sub_tile.bounds,
-                                 'heatmap': None
-                             })
-                             
-                         st.success(f"Found {len(display_refined)} refined micro-targets matching '{refine_query}'!")
-                         st.markdown("### 🔬 Refinement Results")
-                         render_result_grid(display_refined, show_heatmaps=False, key_prefix="refined")
     else:
         st.info(
             "👋 **Getting Started**\n\n"

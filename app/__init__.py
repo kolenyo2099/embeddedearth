@@ -1,1 +1,1 @@
-"""ElLocoGIS - Streamlit App Module"""
+"""EmbeddedEarth - Streamlit App Module"""

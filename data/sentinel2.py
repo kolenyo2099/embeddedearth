@@ -241,7 +241,7 @@ class Sentinel2Retriever:
         image: ee.Image,
         aoi: ee.Geometry,
         filename: str,
-        folder: str = 'ElLocoGIS',
+        folder: str = 'EmbeddedEarth',
         scale: int = 10
     ) -> ee.batch.Task:
         """

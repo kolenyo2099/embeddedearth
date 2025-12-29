@@ -1,1 +1,1 @@
-"""ElLocoGIS - UI Components"""
+"""EmbeddedEarth - UI Components"""

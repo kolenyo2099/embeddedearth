@@ -1,1 +1,1 @@
-"""ElLocoGIS - Geospatial Pipeline Module"""
+"""EmbeddedEarth - Geospatial Pipeline Module"""

@@ -1,5 +1,4 @@
-"""
-ElLocoGIS Configuration Module
+"""EmbeddedEarth Configuration Module
 
 Centralized configuration for the entire application.
 All settings, paths, and constants are defined here.

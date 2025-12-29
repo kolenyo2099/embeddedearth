@@ -22,32 +22,32 @@ def main():
     # Get project root
     project_root = Path(__file__).parent.absolute()
     app_path = project_root / "app" / "main.py"
+    """Run the EmbeddedEarth application."""
+    print("🚀 Launching EmbeddedEarth...")
     
-    # Ensure we're in the project directory
-    os.chdir(project_root)
+    # Check dependencies
+    try:
+        import streamlit
+        import geemap
+        import open_clip
+    except ImportError as e:
+        print(f"❌ Missing dependency: {e.name}")
+        print("Please run: ./install.sh")
+        sys.exit(1)
+        
+    # Run Streamlit
+    import streamlit.web.cli as stcli
+    app_path = os.path.join(os.path.dirname(__file__), "app/main.py")
     
-    # Streamlit configuration
-    args = [
-        sys.executable, "-m", "streamlit", "run",
-        str(app_path),
-        "--server.headless=true",
-        "--browser.gatherUsageStats=false",
-        "--theme.base=light",
-        "--theme.primaryColor=#003262",  # Berkeley Blue
-        "--theme.backgroundColor=#FFFFFF",
-        "--theme.secondaryBackgroundColor=#F5F5F5",
-        "--theme.textColor=#333333",
-    ]
+    sys.argv = ["streamlit", "run", app_path, "--server.port=8501", "--server.address=0.0.0.0"]
     
-    print(f"🛰️  Starting ElLocoGIS...")
-    print(f"📁 Project root: {project_root}")
-    print(f"🌐 Opening browser at http://localhost:8501")
-    print("\nPress Ctrl+C to stop the server.\n")
+    print(f"🛰️  Starting EmbeddedEarth...")
+    print(f"👉 Open http://localhost:8501 in your browser")
     
     try:
-        subprocess.run(args, check=True)
+        sys.exit(stcli.main())
     except KeyboardInterrupt:
-        print("\n\n👋 ElLocoGIS stopped.")
+        print("\n\n👋 EmbeddedEarth stopped.")
     except FileNotFoundError:
         print("❌ Streamlit not found. Please install with: pip install streamlit")
         sys.exit(1)

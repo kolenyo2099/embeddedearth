@@ -1,1 +1,1 @@
-"""ElLocoGIS - AI Models Module"""
+"""EmbeddedEarth - AI Models Module"""
