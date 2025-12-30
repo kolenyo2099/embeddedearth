@@ -112,15 +112,16 @@ def render_search_form(key_prefix: str = "search") -> SearchParameters:
                 help="Maximum number of matching tiles to return."
             )
             
-            params.similarity_threshold = st.slider(
-                "Similarity Threshold",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.05,
-                step=0.001,
-                format="%.3f",
-                help="Minimum similarity score (0 to 1). Adjust to filter results."
+            threshold_pct = st.slider(
+                "Minimum Match Confidence (%)",
+                min_value=0,
+                max_value=100,
+                value=int(search_config.similarity_threshold * 100) if search_config.similarity_threshold else 10,
+                step=1,
+                format="%d%%",
+                help="Minimum similarity percentage. Note: For satellite AI, >15% is often a strong match."
             )
+            params.similarity_threshold = threshold_pct / 100.0
             
             st.markdown("#### 🔍 Search Resolution")
             params.resolution = st.slider(

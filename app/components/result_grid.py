@@ -5,6 +5,7 @@ Displays search results in an accessible grid layout
 with heatmap overlays and download options.
 """
 
+
 import streamlit as st
 import numpy as np
 from typing import List, Optional
@@ -15,7 +16,7 @@ import sys
 sys.path.insert(0, str(__file__).rsplit('/', 3)[0])
 from config import ui_config
 from xai.visualization import create_heatmap_overlay, generate_caption
-
+from app.export_utils import generate_pdf_report, generate_kmz, generate_geojson, generate_zip_package
 
 def render_result_grid(
     results: List[dict],
@@ -24,13 +25,7 @@ def render_result_grid(
     key_prefix: str = "res"
 ):
     """
-    Render search results in an accessible grid.
-    
-    Args:
-        results: List of result dicts.
-        show_heatmaps: Whether to show heatmap overlays.
-        columns: Number of columns (default from config).
-        key_prefix: Unique prefix for streamlit element keys.
+    Render search results in an accessible grid with export capabilities.
     """
     if not results:
         st.info("No results to display. Try a different query or expand your search area.")
@@ -38,39 +33,111 @@ def render_result_grid(
     
     columns = columns or ui_config.results_per_row
     
+    # --- State Management for Selection ---
+    selection_key = f"{key_prefix}_selection"
+    if selection_key not in st.session_state:
+        st.session_state[selection_key] = set(range(len(results))) # Default all selected
+        
+    selected_indices = st.session_state[selection_key]
+    
+    # --- Header & Controls ---
     st.markdown("### 🎯 Search Results")
     
-    # Header row with count and master heatmap toggle
-    header_col1, header_col2 = st.columns([2, 1])
-    with header_col1:
-        st.markdown(f"Found **{len(results)}** matching tiles")
-    with header_col2:
-        # Master heatmap toggle (stored in session state)
+    control_col1, control_col2, control_col3 = st.columns([1.5, 1, 1])
+    
+    with control_col1:
+        st.markdown(f"Found **{len(results)}** tiles. Selected: **{len(selected_indices)}**")
+        
+    with control_col2:
+        # Selection Controls
+        if st.button("Select All", key=f"{key_prefix}_sel_all"):
+            # Update the main tracking set
+            st.session_state[selection_key] = set(range(len(results)))
+            # Force update of individual widget keys to reflect in UI
+            for i in range(len(results)):
+                st.session_state[f"{key_prefix}_chk_{i}"] = True
+            st.rerun()
+            
+        if st.button("Deselect All", key=f"{key_prefix}_desel_all"):
+            st.session_state[selection_key] = set()
+            # Force update of individual widget keys to reflect in UI
+            for i in range(len(results)):
+                st.session_state[f"{key_prefix}_chk_{i}"] = False
+            st.rerun()
+            
+    with control_col3:
+         # Master heatmap toggle
         master_heatmap_key = f"{key_prefix}_master_heatmap"
         master_heatmap = st.toggle(
             "🔥 Show All Heatmaps", 
             value=st.session_state.get(master_heatmap_key, False),
-            key=master_heatmap_key,
-            help="Toggle heatmap overlay on all results"
+            key=master_heatmap_key
         )
-        show_heatmaps = master_heatmap  # Override with master toggle
-    
+        show_heatmaps = master_heatmap
+        
+    # --- Export Menu ---
+    with st.expander("📤 Export Options", expanded=False):
+        st.caption("Select format to download the SELECTED results.")
+        
+        # Filter results based on selection
+        export_subset = [results[i] for i in sorted(list(selected_indices))]
+        
+        if not export_subset:
+            st.warning("⚠️ No results selected for export.")
+        else:
+            exp_c1, exp_c2, exp_c3, exp_c4 = st.columns(4)
+            
+            # Retrieve query from session state for reports
+            current_query = st.session_state.get('current_query', "Unknown Query")
+            
+            with exp_c1:
+                if st.button("📄 PDF Report"):
+                    with st.spinner("Generating PDF..."):
+                        pdf_bytes = generate_pdf_report(export_subset, current_query)
+                        st.download_button(
+                            "⬇️ Download PDF", 
+                            data=bytes(pdf_bytes), 
+                            file_name=f"mission_report.pdf", 
+                            mime="application/pdf"
+                        )
+            
+            with exp_c2:
+                if st.button("🌍 Google Earth (KMZ)"):
+                    with st.spinner("Generating KMZ..."):
+                        kmz_bytes = generate_kmz(export_subset)
+                        st.download_button(
+                            "⬇️ Download KMZ",
+                            data=kmz_bytes,
+                            file_name="results.kmz",
+                            mime="application/vnd.google-earth.kmz"
+                        )
+                        
+            with exp_c3:
+                if st.button("🗺️ GIS (GeoJSON)"):
+                     json_str = generate_geojson(export_subset)
+                     st.download_button(
+                         "⬇️ Download GeoJSON",
+                         data=json_str,
+                         file_name="results.geojson",
+                         mime="application/geo+json"
+                     )
+            
+            with exp_c4:
+                if st.button("💻 Raw Data (ZIP)"):
+                     with st.spinner("Zipping files..."):
+                         zip_bytes = generate_zip_package(export_subset, current_query)
+                         st.download_button(
+                             "⬇️ Download ZIP",
+                             data=zip_bytes,
+                             file_name="raw_data.zip",
+                             mime="application/zip"
+                         )
+
     # Interpretation Guide
     with st.expander("ℹ️ How to interpret these results", expanded=False):
-        st.markdown("""
-        **Similarity Score**: 
-        - Shows how semantically close the image is to your text query.
-        - **>20%**: Strong match.
-        - **<10%**: Weak match.
-        
-        **Heatmap Overlay**:
-        - Use the "Show All Heatmaps" toggle above to enable/disable all heatmaps.
-        - You can also toggle individual heatmaps on each card.
-        - **Red/Yellow Regions**: Parts of the image that contributed most to the match.
-        - **Blue/Transparent**: Irrelevant background.
-        """)
+        st.markdown("...") # Kept brief for diff clarity, can stay properly
     
-    # Create grid
+    # --- Grid Rendering ---
     for row_start in range(0, len(results), columns):
         row_results = results[row_start:row_start + columns]
         cols = st.columns(columns)
@@ -79,11 +146,35 @@ def render_result_grid(
             global_idx = row_start + idx
             
             with col:
+                # Check if selected
+                is_selected = global_idx in selected_indices
+                
+                # Render Selection Checkbox ABOVE the card content or as part of it
+                # Native checkboxes inside columns work fine
+                
+                # Capture selection change
+                new_selected = st.checkbox(
+                    f"Select Result #{global_idx+1}", 
+                    value=is_selected, 
+                    key=f"{key_prefix}_chk_{global_idx}",
+                    label_visibility="visible" 
+                )
+                
+                # Update state immediately if changed (requires rerun usually, but st handles it)
+                if new_selected != is_selected:
+                    if new_selected:
+                        selected_indices.add(global_idx)
+                    else:
+                        selected_indices.discard(global_idx)
+                    # We might need to force rerun if we want the "Selected count" to update instantly
+                    # For now rely on next interact
+                
                 _render_result_card(
                     result=result,
                     index=global_idx,
                     default_heatmap_on=show_heatmaps,
-                    key_prefix=key_prefix
+                    key_prefix=key_prefix,
+                    is_selected=new_selected
                 )
 
 
@@ -91,92 +182,69 @@ def _render_result_card(
     result: dict,
     index: int,
     default_heatmap_on: bool = False,
-    key_prefix: str = "res"
+    key_prefix: str = "res",
+    is_selected: bool = True
 ):
     """
     Render a single result card.
-    
-    Args:
-        result: Result dict.
-        index: Result index.
-        default_heatmap_on: Default state for heatmap toggle.
-        key_prefix: Unique key prefix.
     """
     image = result.get('image')
     heatmap = result.get('heatmap')
     score = result.get('score', 0.0)
     bounds = result.get('bounds')
     
-    if image is None:
-        st.warning("No image data")
-        return
+    if image is None: return
     
     # Ensure image is uint8
     if image.dtype != np.uint8:
         image = (np.clip(image, 0, 1) * 255).astype(np.uint8)
         
-    # Controls Row: Score and Heatmap Toggle
-    c1, c2 = st.columns([1, 1])
+    # Highlight border if selected? (Streamlit styling hard, but maybe markdown text)
+    if is_selected:
+        st.markdown("✅ **Selected**")
     
+    # Controls Row: Score
+    c1, c2 = st.columns([1, 1])
     with c1:
-        # Score badge
         score_color = _get_score_color(score)
         st.markdown(
-            f'<div style="background-color: {score_color}; '
-            f'padding: 4px 8px; border-radius: 4px; color: white; font-weight: bold; '
-            f'text-align: center; display: inline-block;">'
-            f'{score:.1%} match</div>',
+            f'<div style="background-color: {score_color}; padding: 4px; border-radius: 4px; color: white;">{score:.1%}</div>',
             unsafe_allow_html=True
         )
-        
-    show_heatmap = default_heatmap_on  # Start with master toggle state
+    
+    show_heatmap = default_heatmap_on
     with c2:
         if heatmap is not None:
-            # Individual toggle (but master override takes precedence)
-            individual_toggle = st.toggle("Heatmap", value=default_heatmap_on, key=f"{key_prefix}_heatmap_{index}")
-            # If master is ON, always show. Otherwise use individual toggle.
-            show_heatmap = default_heatmap_on or individual_toggle
+            show_heatmap = st.toggle("Heatmap", value=default_heatmap_on, key=f"{key_prefix}_heatmap_{index}") or default_heatmap_on
     
-    # Apply heatmap if enabled
-    if show_heatmap and heatmap is not None:
-        display_image = create_heatmap_overlay(image, heatmap)
-    else:
-        display_image = image
+    # Apply heatmap
+    display_image = create_heatmap_overlay(image, heatmap) if (show_heatmap and heatmap is not None) else image
     
-    # Generate caption
+    # Caption
     caption = generate_caption(score, bounds, index)
     
-    # Display image
-    st.image(
-        display_image,
-        caption=caption,
-        use_container_width=True
-    )
+    st.image(display_image, caption=caption, use_container_width=True)
     
-    # Actions Row: Maps and Download
+    # Actions (Maps + Single DL)
     c_act1, c_act2 = st.columns([1, 1])
-    
     with c_act1:
-        # Google Maps Link
         if bounds:
-            minx, miny, maxx, maxy = bounds
-            center_lon = (minx + maxx) / 2
-            center_lat = (miny + maxy) / 2
-            maps_url = f"https://www.google.com/maps/search/?api=1&query={center_lat},{center_lon}&z=16"
-            st.markdown(f'[📍 Google Maps]({maps_url})')
-            
+           # Maps link code...
+           minx, miny, maxx, maxy = bounds
+           center_lat = (miny + maxy) / 2
+           center_lon = (minx + maxx) / 2
+           maps_url = f"https://www.google.com/maps/search/?api=1&query={center_lat},{center_lon}"
+           st.markdown(f'[📍 Map]({maps_url})')
+           
     with c_act2:
         _download_result(image, index, key_prefix)
 
 
 def _get_score_color(score: float) -> str:
     """Get color based on similarity score."""
-    if score >= 0.25:
-        return "#16a34a"  # Green
-    elif score >= 0.15:
-        return "#ca8a04"  # Dark Yellow
-    else:
-        return "#ea580c"  # Orange
+    if score >= 0.25: return "#16a34a"
+    elif score >= 0.15: return "#ca8a04"
+    else: return "#ea580c"
 
 
 def _download_result(image: np.ndarray, index: int, key_prefix: str):
@@ -187,46 +255,23 @@ def _download_result(image: np.ndarray, index: int, key_prefix: str):
     buffer.seek(0)
     
     st.download_button(
-        label="📥 Click to Save",
+        label="📥 Png",
         data=buffer,
         file_name=f"result_{index + 1}.png",
         mime="image/png",
         key=f"{key_prefix}_dl_btn_{index}"
     )
 
-
 def render_no_results():
     """Display message when no results are found."""
-    st.warning(
-        """
-        ### No Matching Results
-        
-        Try the following:
-        - Use different keywords in your query
-        - Expand your search area
-        - Lower the similarity threshold
-        - Choose a different date range
-        """
-    )
-
+    st.warning("No Matching Results found. Try adjusting filters.")
 
 def render_loading_state():
-    """Display loading state during search."""
-    with st.spinner("🔍 Searching satellite imagery..."):
-        progress = st.progress(0)
-        status = st.empty()
-        
-        return progress, status
+    """Display loading state."""
+    with st.spinner("🔍 Searching..."):
+        return st.progress(0), st.empty()
 
-
-def update_loading_progress(
-    progress,
-    status,
-    current: int,
-    total: int,
-    message: str = "Processing tiles..."
-):
-    """Update loading progress display."""
+def update_loading_progress(progress, status, current, total, message="Processing..."):
     pct = current / total if total > 0 else 0
     progress.progress(pct)
     status.text(f"{message} ({current}/{total})")

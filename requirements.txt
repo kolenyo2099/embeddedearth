@@ -34,3 +34,4 @@ matplotlib>=3.7.0
 # Utilities
 requests>=2.31.0
 tqdm>=4.66.0
+fpdf2>=2.7.0
