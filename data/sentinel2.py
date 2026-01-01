@@ -150,6 +150,10 @@ class Sentinel2Retriever:
         s2_with_cs = self._join_cloud_scores(s2, aoi, start_date, end_date)
         s2_masked = s2_with_cs.map(self._apply_cloud_mask)
         
+        # Check size (blocking call, but safe for low latency apps or debug)
+        # count = s2_masked.size().getInfo()
+        # print(f"Found {count} images for {start_date} to {end_date}")
+        
         return s2_masked
     
     def get_composite(
@@ -186,7 +190,17 @@ class Sentinel2Retriever:
         
         composite = reducers[reducer]()
         
+        # Fallback: if composite has no bands (empty collection), try to select from raw if existing
+        # But we can't easily check for empty bands without getInfo()
+        # Instead, verify we set the default bands correctly.
+        
+        # Note: If collection is empty, median() returns an image with no bands.
+        # We should handle this upstream or set default bands.
+        
         # Select only the bands we need for DOFA-CLIP
+        # Use regexp to avoid error if band missing? No, strict selection is better.
+        # Add a check for collection size
+        
         composite = composite.select(self._bands)
         
         # Clip to AOI

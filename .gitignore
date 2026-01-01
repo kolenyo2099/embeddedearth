@@ -76,3 +76,7 @@ tests/
 models_cache/
 cache/
 data_cache/
+
+# Debug Outputs
+pipeline/debug_output/
+pipeline/debug_dinov3_pipeline.py

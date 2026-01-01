@@ -15,9 +15,9 @@ fi
 echo "✅ 'uv' found."
 
 # 2. Create virtual environment
-echo "📦 Creating virtual environment (.venv)..."
-uv venv .venv
-source .venv/bin/activate
+echo "📦 Creating virtual environment (venv)..."
+uv venv venv
+source venv/bin/activate
 
 # 3. Clone DOFA-CLIP for custom open_clip fork
 if [ ! -d "DOFA-CLIP" ]; then
@@ -40,5 +40,5 @@ uv pip install -r requirements.txt
 echo "🎉 Installation complete!"
 echo ""
 echo "To run the application:"
-echo "  source .venv/bin/activate"
+echo "  source venv/bin/activate"
 echo "  streamlit run app/main.py"

@@ -198,57 +198,70 @@ def render_main_content():
         print(f"[DEBUG MAIN] aoi is None: {aoi is None}")
     
     with col_right:
-        # Search form
-        search_params = render_search_form()
+
+        # Search Tabs
+        tab_semantic, tab_zeroshot = st.tabs(["💬 Semantic Search", "🎯 Zero-Shot Detection"])
         
-        # Debug info
-        print(f"[DEBUG MAIN] search_params.submitted: {search_params.submitted}")
-        print(f"[DEBUG MAIN] search_params.query: {search_params.query}")
-        
-        # Process search
-        if search_params.submitted:
-            print("[DEBUG MAIN] Form was submitted!")
+        # --- TAB 1: Semantic Search ---
+        with tab_semantic:
+            search_params = render_search_form()
             
-            is_valid, error = validate_search_params(search_params)
-            print(f"[DEBUG MAIN] Validation: is_valid={is_valid}, error={error}")
+            # Debug info
+            # print(f"[DEBUG MAIN] search_params.submitted: {search_params.submitted}") # Commented out
             
-            # Debug: Check session state for AOI
-            print(f"[DEBUG MAIN] Session state keys: {list(st.session_state.keys())}")
-            print(f"[DEBUG MAIN] Session state aoi_geojson: {st.session_state.get('aoi_geojson')}")
+            # Process search
+            if search_params.submitted:
+                is_valid, error = validate_search_params(search_params)
+                
+                # Check Global AOI
+                if aoi is None:
+                    aoi = st.session_state.get('aoi_geojson')
+                
+                if not is_valid:
+                    st.error(error)
+                elif aoi is None:
+                    st.error("Please draw an area of interest on the map first.")
+                else:
+                    announce_to_screen_reader("Search started. Please wait for results.")
+                    with st.spinner("🔍 Searching..."):
+                        results = run_search(aoi, search_params)
+                        st.session_state.search_results = results
+                        st.session_state.current_query = search_params.query
+                    
+                    if results:
+                        announce_to_screen_reader(f"Found {len(results)} results.")
+
+        # --- TAB 2: Zero-Shot Detection ---
+        with tab_zeroshot:
+            from app.components.zero_shot_form import render_zero_shot_form
+            from pipeline.zero_shot_pipeline import run_zero_shot_pipeline
             
-            # Also check session state directly if aoi is None
-            if aoi is None:
-                aoi = st.session_state.get('aoi_geojson')
-                print(f"[DEBUG MAIN] Fallback to session state aoi: {aoi}")
+            zs_params = render_zero_shot_form()
             
-            if not is_valid:
-                st.error(error)
-                print(f"[DEBUG MAIN] Validation failed: {error}")
-            elif aoi is None:
-                st.error("Please draw an area of interest on the map first.")
-                print("[DEBUG MAIN] ERROR: AOI is still None after all checks")
-                
-                # Extra debug info
-                with st.expander("🔧 AOI Debug Info"):
-                    st.markdown("**Session State:**")
-                    for key in st.session_state.keys():
-                        if 'aoi' in key.lower() or 'draw' in key.lower() or 'geo' in key.lower():
-                            st.write(f"{key}: {st.session_state[key]}")
-            else:
-                print(f"[DEBUG MAIN] AOI is valid, proceeding with search. AOI: {aoi}")
-                
-                # Announce to screen readers
-                announce_to_screen_reader("Search started. Please wait for results.")
-                
-                # Run search
-                with st.spinner("🔍 Searching..."):
-                    results = run_search(aoi, search_params)
-                    st.session_state.search_results = results
-                    st.session_state.current_query = search_params.query
-                
-                if results:
-                    announce_to_screen_reader(f"Found {len(results)} results.")
-                    print(f"[DEBUG MAIN] Search completed with {len(results)} results")
+            if zs_params and zs_params.get("submitted"):
+                # Check Global AOI
+                if aoi is None:
+                    aoi = st.session_state.get('aoi_geojson')
+                    
+                if aoi is None:
+                     st.error("Please draw an area of interest on the map first.")
+                else:
+                    with st.spinner("🎯 Running Zero-Shot Detection..."):
+                        results = run_zero_shot_pipeline(
+                            aoi_geojson=aoi,
+                            start_date=zs_params['start_date'].strftime('%Y-%m-%d'),
+                            end_date=zs_params['end_date'].strftime('%Y-%m-%d'),
+                            query_vector=zs_params['query_vector'],
+                            threshold=zs_params['threshold'],
+                            hf_token=zs_params['token']
+                        )
+                        st.session_state.search_results = results
+                        st.session_state.current_query = "Zero-Shot Pattern"
+                        
+                        if results:
+                             st.success(f"Found {len(results)} matches!")
+                        else:
+                             st.warning(f"⚠️ No matches found above {zs_params['threshold']:.0%} similarity. Try lowering the threshold or checking your query patch.")
     
     st.markdown('</div>', unsafe_allow_html=True)
     

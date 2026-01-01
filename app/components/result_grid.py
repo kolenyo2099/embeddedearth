@@ -40,6 +40,13 @@ def render_result_grid(
         
     selected_indices = st.session_state[selection_key]
     
+    # Validation: Ensure indices are within bounds of current results
+    # This prevents IndexError if results list shrinks between searches
+    valid_indices = {i for i in selected_indices if i < len(results)}
+    if len(valid_indices) != len(selected_indices):
+        selected_indices = valid_indices
+        st.session_state[selection_key] = selected_indices
+    
     # --- Header & Controls ---
     st.markdown("### 🎯 Search Results")
     
@@ -67,13 +74,25 @@ def render_result_grid(
             
     with control_col3:
          # Master heatmap toggle
+        # Master heatmap toggle
         master_heatmap_key = f"{key_prefix}_master_heatmap"
-        master_heatmap = st.toggle(
-            "🔥 Show All Heatmaps", 
-            value=st.session_state.get(master_heatmap_key, False),
+        show_heatmaps = st.toggle(
+            "🔥 Show Heatmaps", 
+            value=st.session_state.get(master_heatmap_key, True), # Default True
             key=master_heatmap_key
         )
-        show_heatmaps = master_heatmap
+        
+        # Heatmap Type Selector (New)
+        # If DINO attention is available in the first result, show the option
+        has_attn = results and 'dino_attention' in results[0]
+        heatmap_mode = "Similarity"
+        if has_attn:
+             heatmap_mode = st.radio(
+                 "Visualization Mode",
+                 ["Similarity Scan", "DINO Attention"],
+                 horizontal=True,
+                 key=f"{key_prefix}_vis_mode"
+             )
         
     # --- Export Menu ---
     with st.expander("📤 Export Options", expanded=False):
@@ -174,7 +193,8 @@ def render_result_grid(
                     index=global_idx,
                     default_heatmap_on=show_heatmaps,
                     key_prefix=key_prefix,
-                    is_selected=new_selected
+                    is_selected=new_selected,
+                    heatmap_mode=heatmap_mode
                 )
 
 
@@ -183,13 +203,23 @@ def _render_result_card(
     index: int,
     default_heatmap_on: bool = False,
     key_prefix: str = "res",
-    is_selected: bool = True
+    is_selected: bool = True,
+    heatmap_mode: str = "Similarity"
 ):
     """
     Render a single result card.
     """
     image = result.get('image')
-    heatmap = result.get('heatmap')
+    
+    # Select heatmap based on mode
+    if "Attention" in heatmap_mode:
+        heatmap = result.get('dino_attention')
+    elif "PCA" in heatmap_mode:
+        # PCA returns a 3-channel RGB image, not a heatmap
+        heatmap = result.get('pca_map')
+    else:
+        heatmap = result.get('heatmap')
+        
     score = result.get('score', 0.0)
     bounds = result.get('bounds')
     
@@ -223,7 +253,7 @@ def _render_result_card(
     # Caption
     caption = generate_caption(score, bounds, index)
     
-    st.image(display_image, caption=caption, use_container_width=True)
+    st.image(display_image, caption=caption, use_column_width=True)
     
     # Actions (Maps + Single DL)
     c_act1, c_act2 = st.columns([1, 1])
