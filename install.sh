@@ -49,9 +49,21 @@ fi
 
 echo "🎉 Installation complete!"
 echo ""
-echo "To run the application:"
-echo "  source venv/bin/activate"
-echo "  python run.py"
+echo "🚀 Starting backend and frontend..."
+python run.py &
+BACKEND_PID=$!
+
+if command -v npm &> /dev/null; then
+    (cd frontend && npm run dev -- --host 0.0.0.0 --port 5173) &
+    FRONTEND_PID=$!
+    echo "✅ Frontend dev server started (PID: $FRONTEND_PID)."
+else
+    echo "⚠️ npm not found. Frontend dev server not started."
+fi
+
 echo ""
-echo "To build the frontend (optional):"
-echo "  cd frontend && npm run build"
+echo "✅ Backend API running at http://localhost:8501"
+echo "✅ Frontend dev server running at http://localhost:5173"
+echo ""
+echo "To stop services:"
+echo "  kill $BACKEND_PID ${FRONTEND_PID:-}"
