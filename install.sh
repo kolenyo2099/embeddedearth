@@ -37,8 +37,21 @@ cd ../..
 echo "📚 Installing application dependencies..."
 uv pip install -r requirements.txt
 
+# 6. Install frontend dependencies
+if command -v npm &> /dev/null; then
+    echo "📦 Installing frontend dependencies..."
+    (cd frontend && npm install)
+    echo "✅ Frontend dependencies installed."
+else
+    echo "⚠️ npm not found. Skipping frontend dependency install."
+    echo "   Install Node.js/npm to build the Svelte frontend."
+fi
+
 echo "🎉 Installation complete!"
 echo ""
 echo "To run the application:"
 echo "  source venv/bin/activate"
-echo "  streamlit run app/main.py"
+echo "  python run.py"
+echo ""
+echo "To build the frontend (optional):"
+echo "  cd frontend && npm run build"
