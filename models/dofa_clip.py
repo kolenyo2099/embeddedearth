@@ -14,7 +14,7 @@ from transformers import CLIPTokenizer, CLIPTextModel
 
 import sys
 sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
-from config import model_config, sentinel2_bands
+from config import model_config, sentinel2_bands, sentinel1_bands
 from models.wavelengths import get_wavelength_tensor
 
 # =============================================================================
@@ -181,8 +181,13 @@ class DynamicPatchEmbed(nn.Module):
         sys.stderr.write(f"[DEBUG MODEL] set_wavelengths called with Mean={w_mean:.4f}\n")
         
         # SAFETY CATCH: If wavelengths are in Nanometers (>100), convert to Micrometers
-        if w_mean > 100:
-             sys.stderr.write("[DEBUG MODEL] DETECTED NANOMETERS. Auto-correcting to Micrometers (/1000).\n")
+        # SAFETY CATCH: If wavelengths are in Nanometers (e.g. 400-2500), convert to Micrometers
+        # But allow for Microwave (>3000 nm or actually >1 cm = 10000 um) inputs without downscaling
+        # Typical Optical (nm): 400 to 2500. Mean ~1000.
+        # Microwave (um): C-band ~55000. Mean ~55000.
+        
+        if w_mean > 100 and w_mean < 10000:
+             sys.stderr.write(f"[DEBUG MODEL] DETECTED NANOMETERS (Mean={w_mean:.1f}). Auto-correcting to Micrometers (/1000).\n")
              wavelengths_tensor = wavelengths_tensor / 1000.0
              
         # Compute sinusoidal embedding
@@ -348,7 +353,7 @@ class DOFACLIPWrapper:
         if not self._loaded: self._load_model()
         
         # Use centralized preprocessing
-        images = self.preprocess_tensor(images, normalize=True)
+        images = self.preprocess_tensor(images, normalize=normalize)
               
         # Get default wavelengths if not provided
         if wavelengths is None:
@@ -382,7 +387,7 @@ class DOFACLIPWrapper:
         if not self._loaded: self._load_model()
         
         # Use centralized preprocessing
-        images = self.preprocess_tensor(images, normalize=True)
+        images = self.preprocess_tensor(images, normalize=normalize)
             
         if wavelengths is None:
             wavelengths = torch.tensor(

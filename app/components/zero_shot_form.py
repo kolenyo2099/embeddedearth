@@ -110,7 +110,8 @@ def render_zero_shot_form():
         st.success("Reference Pattern Ready")
         query_vector = st.session_state.zero_shot_query
     else:
-        st.stop() # Stop here until reference is ready
+        # st.stop() # Stop here until reference is ready - CAUSES MAIN SCRIPT TO STOP
+        return None
 
     st.markdown("---")
     
@@ -118,6 +119,8 @@ def render_zero_shot_form():
     st.subheader("2. Search Parameters")
     
     from datetime import datetime, timedelta
+    
+    sensor = st.selectbox("Sensor", ["Sentinel-2", "Sentinel-1"], index=0)
     
     col1, col2 = st.columns(2)
     with col1:
@@ -132,6 +135,7 @@ def render_zero_shot_form():
         return {
             "start_date": start_date,
             "end_date": end_date,
+            "sensor": sensor,
             "threshold": threshold,
             "query_vector": query_vector,
             "token": st.session_state.hf_token,

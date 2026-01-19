@@ -371,7 +371,7 @@ def verify_explanation_perturbation(
     if tensor_img.shape[1] == 3:
         # B4, B3, B2 for S2. (Red=665, Green=560, Blue=490)
         # Note: image from result_grid is likely RGB.
-        rgb_waves = torch.tensor([665.0, 560.0, 490.0]).float().to(tensor_img.device)
+        rgb_waves = torch.tensor([665.0, 560.0, 490.0]).float().to(tensor_img.device) / 1000.0
         
         # We need to restore the original 6-band config later to not break search
         # Ideally we can read it, but set_wavelengths doesn't return it.

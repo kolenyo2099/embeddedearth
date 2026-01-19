@@ -20,6 +20,7 @@ class SearchParameters:
     """Container for search form parameters."""
     
     query: str = ""
+    sensor: str = "Sentinel-2" # "Sentinel-2" or "Sentinel-1"
     search_type: str = "text"  # "text" or "image"
     reference_image: Optional[bytes] = None
     start_date: Optional[datetime] = None
@@ -55,6 +56,15 @@ def render_search_form(key_prefix: str = "search") -> SearchParameters:
         help="Search by describing what you're looking for, or upload a reference image."
     )
     params.search_type = "text" if search_type == "Text Query" else "image"
+    
+    # Sensor Selector
+    sensor = st.radio(
+        "Sensor",
+        options=["Sentinel-2", "Sentinel-1"],
+        horizontal=True,
+        help="Choose between Optical (Sentinel-2) or Radar (Sentinel-1) imagery."
+    )
+    params.sensor = sensor
     
     # Text input OUTSIDE the form to prevent Enter key submission
     # The form will only submit when clicking the button

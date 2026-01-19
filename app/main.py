@@ -200,7 +200,7 @@ def render_main_content():
     with col_right:
 
         # Search Tabs
-        tab_semantic, tab_zeroshot = st.tabs(["💬 Semantic Search", "🎯 Zero-Shot Detection"])
+        tab_semantic, tab_zeroshot, tab_copernicus = st.tabs(["💬 Semantic Search", "🎯 Zero-Shot Detection", "🛰️ Copernicus FM"])
         
         # --- TAB 1: Semantic Search ---
         with tab_semantic:
@@ -262,6 +262,56 @@ def render_main_content():
                              st.success(f"Found {len(results)} matches!")
                         else:
                              st.warning(f"⚠️ No matches found above {zs_params['threshold']:.0%} similarity. Try lowering the threshold or checking your query patch.")
+
+        # --- TAB 3: Copernicus FM ---
+        with tab_copernicus:
+            try:
+                from app.components.copernicus_form import render_copernicus_form
+                from pipeline.copernicus_pipeline import CopernicusSearchPipeline
+                
+                # Pass current map AOI to form for capture
+                cop_params = render_copernicus_form(aoi)
+                
+                if cop_params.submitted:
+                    if not cop_params.query_geom:
+                        st.error("Please capture a Query Area first (Step 1).")
+                    elif not cop_params.search_geom:
+                        st.error("Please capture a Search Area first (Step 1).")
+                    else:
+                        status_container = st.status(f"🛰️ CopernicusFM ({cop_params.sensor})", expanded=True)
+                        with status_container:
+                            st.write("Initializing pipeline...")
+                            
+                            def update_progress(msg):
+                                st.write(msg)
+                                
+                            pipeline = CopernicusSearchPipeline()
+                            results = pipeline.run_search(
+                                query_geom=cop_params.query_geom,
+                                search_geom=cop_params.search_geom,
+                                start_date=cop_params.start_date.strftime('%Y-%m-%d'),
+                                end_date=cop_params.end_date.strftime('%Y-%m-%d'),
+                                sensor=cop_params.sensor,
+                                resolution=cop_params.resolution,
+                                threshold=cop_params.threshold,
+                                progress_callback=update_progress
+                            )
+                            
+                            st.write("Search complete!")
+                            status_container.update(label="✅ Search Complete", state="complete", expanded=False)
+
+                        st.session_state.search_results = results
+                        st.session_state.current_query = f"CopernicusFM ({cop_params.sensor})"
+                        
+                        if results:
+                            st.success(f"Found {len(results)} matches!")
+                        else:
+                            st.warning("No matches found.")
+            except Exception as e:
+                st.error(f"Error loading Copernicus FM tab: {e}")
+                print(f"[ERROR] Copernicus Tab: {e}")
+                import traceback
+                traceback.print_exc()
     
     st.markdown('</div>', unsafe_allow_html=True)
     

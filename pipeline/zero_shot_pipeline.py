@@ -161,7 +161,8 @@ def run_zero_shot_pipeline(
                 
             # Extract Features
             # shape: (1, N_patches, D)
-            features = model.extract_features(arr_uint8) 
+            # CRITICAL FIX: Enable center_features to match query vector centering
+            features = model.extract_features(arr_uint8, center_features=True) 
             features = features.squeeze(0) # (N_patches, D)
         except Exception as e:
             print(f"[DEBUG] Tile {i} Feature Extraction Error: {e}")
@@ -175,16 +176,13 @@ def run_zero_shot_pipeline(
         sim_scores = (feats_norm @ query_norm).cpu().numpy() # (N,)
         
         # Map back to spatial map
-        # Grid size matches patch count
-        # 448 / 14 = 32. So 32x32 grid = 1024 patches
-        grid_dim = TILE_SIZE // 14
+        # CRITICAL FIX: Dynamically determine grid dimension instead of assuming fixed size
+        grid_dim = int(np.sqrt(len(sim_scores)))
         
-        if len(sim_scores) != grid_dim * grid_dim:
-            # Maybe registers involved or padding?
-            # Fallback: Reshape based on sqrt
-            # print(f"Shape mismatch: {len(sim_scores)} vs {grid_dim*grid_dim}")
-            side = int(np.sqrt(len(sim_scores)))
-            sim_map = sim_scores.reshape(side, side)
+        if grid_dim * grid_dim != len(sim_scores):
+            # Fallback for non-square results if any (though usually square in the processor)
+            st.warning(f"Feature count {len(sim_scores)} is not a perfect square.")
+            sim_map = sim_scores.reshape(1, -1) # Flattened fallback
         else:
             sim_map = sim_scores.reshape(grid_dim, grid_dim)
             

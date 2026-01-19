@@ -40,6 +40,9 @@ class GEEConfig:
     
     # Sentinel-2 Collection
     s2_collection: str = "COPERNICUS/S2_SR_HARMONIZED"
+
+    # Sentinel-1 Collection
+    s1_collection: str = "COPERNICUS/S1_GRD"
     
     # Cloud Score+ Collection for masking
     cloud_score_collection: str = "GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED"
@@ -77,12 +80,71 @@ class Sentinel2Bands:
         'B12': 2190, # SWIR2
     })
     
+    # Bandwidths in nanometers
+    bandwidths: Dict[str, int] = field(default_factory=lambda: {
+        'B2': 66,
+        'B3': 36,
+        'B4': 31,
+        'B8': 115,
+        'B11': 91,
+        'B12': 175,
+    })
+    
     # Scale factor for reflectance normalization
     scale_factor: float = 10000.0
     
     def get_wavelength_tensor(self) -> List[int]:
         """Get wavelengths as ordered list for model input."""
         return [self.wavelengths[b] for b in self.band_names]
+
+    def get_bandwidth_list(self) -> List[int]:
+        """Get bandwidths as ordered list in nm."""
+        return [self.bandwidths[b] for b in self.band_names]
+
+
+# =============================================================================
+# SENTINEL-1 BAND CONFIGURATION
+# =============================================================================
+
+@dataclass
+class Sentinel1Bands:
+    """Sentinel-1 band configuration for DOFA-CLIP."""
+    
+    # Bands to use (Polarizations)
+    band_names: List[str] = field(default_factory=lambda: [
+        'VV', 'VH'
+    ])
+    
+    # Corresponding wavelengths in microns (for DOFA-CLIP)
+    # C-band ~ 5.55 cm = 55500 microns
+    wavelengths: Dict[str, float] = field(default_factory=lambda: {
+        'VV': 55500.0,
+        'VH': 55500.0,
+        'HH': 55500.0,
+        'HV': 55500.0, 
+    })
+
+    # Bandwidths in microns (approx 1.8mm = 1800 um)
+    bandwidths: Dict[str, float] = field(default_factory=lambda: {
+        'VV': 1800.0,
+        'VH': 1800.0,
+        'HH': 1800.0,
+        'HV': 1800.0,
+    })
+    
+    # Scale factor for backscatter normalization (dB to linear or keeping dB?)
+    # Model likely expects linear intensity or specific scaling. 
+    # Provided weights/config might assume raw values or specific normalization.
+    # For now, we will handle normalization in the retriever.
+    # S1 GRD is usually provided in linear amplitude or intensity, often converted to dB.
+    
+    def get_wavelength_tensor(self) -> List[float]:
+        """Get wavelengths as ordered list for model input."""
+        return [self.wavelengths[b] for b in self.band_names]
+
+    def get_bandwidth_list(self) -> List[float]:
+        """Get bandwidths as ordered list in microns."""
+        return [self.bandwidths[b] for b in self.band_names]
 
 
 # =============================================================================
@@ -187,6 +249,7 @@ class UIConfig:
 # Create default config instances
 gee_config = GEEConfig()
 sentinel2_bands = Sentinel2Bands()
+sentinel1_bands = Sentinel1Bands()
 model_config = ModelConfig()
 tiling_config = TilingConfig()
 search_config = SearchConfig()
