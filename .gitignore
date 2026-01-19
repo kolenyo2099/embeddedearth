@@ -27,6 +27,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+!frontend/src/lib/
 
 # IDE
 .idea/
