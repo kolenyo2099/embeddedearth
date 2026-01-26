@@ -37,8 +37,33 @@ cd ../..
 echo "📚 Installing application dependencies..."
 uv pip install -r requirements.txt
 
+# 6. Install frontend dependencies
+if command -v npm &> /dev/null; then
+    echo "📦 Installing frontend dependencies..."
+    (cd frontend && npm install)
+    echo "✅ Frontend dependencies installed."
+else
+    echo "⚠️ npm not found. Skipping frontend dependency install."
+    echo "   Install Node.js/npm to build the Svelte frontend."
+fi
+
 echo "🎉 Installation complete!"
 echo ""
-echo "To run the application:"
-echo "  source venv/bin/activate"
-echo "  streamlit run app/main.py"
+echo "🚀 Starting backend and frontend..."
+python run.py &
+BACKEND_PID=$!
+
+if command -v npm &> /dev/null; then
+    (cd frontend && npm run dev -- --host 0.0.0.0 --port 5173) &
+    FRONTEND_PID=$!
+    echo "✅ Frontend dev server started (PID: $FRONTEND_PID)."
+else
+    echo "⚠️ npm not found. Frontend dev server not started."
+fi
+
+echo ""
+echo "✅ Backend API running at http://localhost:8501"
+echo "✅ Frontend dev server running at http://localhost:5173"
+echo ""
+echo "To stop services:"
+echo "  kill $BACKEND_PID ${FRONTEND_PID:-}"

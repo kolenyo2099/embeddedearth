@@ -5,7 +5,7 @@ Uses DINOv3 for query-based object detection in satellite imagery.
 
 import numpy as np
 import torch
-import streamlit as st
+import logging
 from datetime import datetime
 from PIL import Image
 
@@ -21,7 +21,9 @@ def run_zero_shot_pipeline(
     query_vector: torch.Tensor,
     threshold: float = 0.5,
     resolution: int = 10,
-    hf_token: str = None
+    hf_token: str = None,
+    progress_callback=None,
+    status_callback=None,
 ) -> list:
     """
     Execute Zero-Shot Detection on an AOI.
@@ -45,17 +47,28 @@ def run_zero_shot_pipeline(
     if not GEEClient.is_initialized():
         GEEClient.initialize()
         
+    logger = logging.getLogger(__name__)
+
+    def log_status(message: str) -> None:
+        if status_callback:
+            status_callback(message)
+        logger.info(message)
+
+    def update_progress(value: float) -> None:
+        if progress_callback:
+            progress_callback(value)
+
     # 2. Initialize Model
     try:
         model = DINOv3Wrapper(token=hf_token)
         # Pre-load to fail fast if token invalid
         model._load_model()
     except Exception as e:
-        st.error(f"Model initialization failed: {e}")
+        logger.exception("Model initialization failed.")
         return []
 
     # 3. Fetch Imagery (Target Area)
-    st.info("🛰️ Fetching target Sentinel-2 imagery...")
+    log_status("🛰️ Fetching target Sentinel-2 imagery...")
     from data.sentinel2 import Sentinel2Retriever
     retriever = Sentinel2Retriever()
     
@@ -70,14 +83,18 @@ def run_zero_shot_pipeline(
         col_check = retriever.get_collection(aoi_ee, start_date, end_date)
         count = col_check.size().getInfo()
         if count == 0:
-            st.error(f"❌ No Sentinel-2 imagery found for this area between {start_date} and {end_date}. Try increasing the date range or cloud threshold.")
+            logger.warning(
+                "No Sentinel-2 imagery found for this area between %s and %s.",
+                start_date,
+                end_date,
+            )
             return []
         print(f"[DEBUG] Found {count} Sentinel-2 scenes for the AOI.")
     except Exception as e:
         print(f"[DEBUG] Collection check failed: {e}")
         # Proceed cautiously? Or stop?
         # If check failed (e.g. auth), subsequent steps will fail too.
-        st.error(f"Failed to query Earth Engine: {e}")
+        logger.exception("Failed to query Earth Engine.")
         return []
         
     # Get Bounds
@@ -102,21 +119,20 @@ def run_zero_shot_pipeline(
     total_tiles = len(grid)
     print(f"Generated {len(grid)} tiles.")   
     if total_tiles > 200:
-        st.warning(f"Processing {total_tiles} tiles. This may take time.")
+        logger.warning("Processing %s tiles. This may take time.", total_tiles)
     
     detections = []
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    status_text.text(f"Starting analysis of {total_tiles} tiles...")
+    update_progress(0.0)
+    log_status(f"Starting analysis of {total_tiles} tiles...")
     
     # Prepare Query Vector
     query_vector = query_vector.to(model.device)
     query_norm = query_vector / query_vector.norm()
     
     for i, (t_bounds, col, row) in enumerate(grid):
-        progress_bar.progress((i + 1) / total_tiles)
-        status_text.text(f"Processing Tile {i+1}/{total_tiles}...")
+        update_progress((i + 1) / total_tiles)
+        log_status(f"Processing Tile {i+1}/{total_tiles}...")
         
         # Geometry
         t_minx, t_miny, t_maxx, t_maxy = t_bounds
@@ -181,7 +197,7 @@ def run_zero_shot_pipeline(
         
         if grid_dim * grid_dim != len(sim_scores):
             # Fallback for non-square results if any (though usually square in the processor)
-            st.warning(f"Feature count {len(sim_scores)} is not a perfect square.")
+            logger.warning("Feature count %s is not a perfect square.", len(sim_scores))
             sim_map = sim_scores.reshape(1, -1) # Flattened fallback
         else:
             sim_map = sim_scores.reshape(grid_dim, grid_dim)
@@ -218,8 +234,7 @@ def run_zero_shot_pipeline(
                 'pca_map': model.get_pca_map(arr_uint8, center_features=True) # Add PCA visualization
             })
             
-    status_text.empty()
-    progress_bar.empty()
+    update_progress(1.0)
     
     # Sort by score
     detections.sort(key=lambda x: x['score'], reverse=True)

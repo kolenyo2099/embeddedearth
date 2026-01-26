@@ -27,6 +27,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+!frontend/src/lib/
 
 # IDE
 .idea/
@@ -64,6 +65,10 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Frontend
+node_modules/
+frontend/dist/
 
 # GEE credentials
 .gee_credentials/
