@@ -15,7 +15,8 @@ import json
 from typing import Optional, Tuple, Dict, Any
 
 import sys
-sys.path.insert(0, str(__file__).rsplit('/', 3)[0])
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from config import ui_config
 
 

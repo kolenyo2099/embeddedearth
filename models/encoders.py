@@ -10,7 +10,8 @@ import numpy as np
 from typing import List, Optional, Union
 
 import sys
-sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import model_config
 from models.dofa_clip import get_model, DOFACLIPWrapper
 from models.wavelengths import get_wavelength_tensor

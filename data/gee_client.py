@@ -12,7 +12,8 @@ from typing import Optional
 from functools import lru_cache
 
 import sys
-sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import gee_config
 
 

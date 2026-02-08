@@ -10,7 +10,8 @@ from typing import Tuple, Optional, List
 from datetime import datetime, timedelta
 
 import sys
-sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import gee_config, sentinel2_bands
 from data.gee_client import GEEClient
 

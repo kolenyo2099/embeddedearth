@@ -11,7 +11,8 @@ import numpy as np
 from typing import Tuple, Optional
 
 import sys
-sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import model_config
 
 class GradECLIP:

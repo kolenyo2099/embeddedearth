@@ -13,7 +13,7 @@ import numpy as np
 from transformers import CLIPTokenizer, CLIPTextModel
 
 import sys
-sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import model_config, sentinel2_bands, sentinel1_bands
 from models.wavelengths import get_wavelength_tensor
 

@@ -19,7 +19,8 @@ import logging
 logging.getLogger('rasterio').setLevel(logging.ERROR)
 
 import sys
-sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import sentinel2_bands, model_config
 from data.gee_client import GEEClient
 
