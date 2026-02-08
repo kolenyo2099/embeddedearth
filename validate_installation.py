@@ -39,12 +39,27 @@ def check_core_dependencies() -> List[Tuple[bool, str]]:
     }
 
     results = []
+    is_windows = sys.platform.startswith('win')
+
     for module, description in deps.items():
         try:
             __import__(module)
             results.append((True, f"✅ {description} ({module})"))
-        except ImportError:
-            results.append((False, f"❌ {description} ({module}) - run: pip install -r requirements.txt"))
+        except ImportError as e:
+            error_msg = str(e)
+            if is_windows and module in ('rasterio', 'geopandas', 'geemap'):
+                if 'DLL' in error_msg or '_base' in error_msg:
+                    results.append((False,
+                        f"❌ {description} ({module}) - WINDOWS DLL ERROR\n"
+                        f"      This requires conda/mamba installation.\n"
+                        f"      See WINDOWS_INSTALL.md for detailed instructions.\n"
+                        f"      Quick fix: run install-windows.bat"))
+                else:
+                    results.append((False,
+                        f"❌ {description} ({module}) - Windows users need conda\n"
+                        f"      See WINDOWS_INSTALL.md"))
+            else:
+                results.append((False, f"❌ {description} ({module}) - run: pip install -r requirements.txt"))
 
     return results
 
@@ -115,6 +130,22 @@ def check_gee_credentials() -> Tuple[bool, str]:
         return True, "✅ GEE credentials found"
     return False, "⚠️  GEE credentials not found - you'll need to authenticate on first run"
 
+def check_windows_platform() -> Tuple[bool, str]:
+    """Check if running on Windows and provide specific guidance."""
+    is_windows = sys.platform.startswith('win')
+    if is_windows:
+        # Check if using conda
+        in_conda = os.environ.get('CONDA_DEFAULT_ENV') is not None
+        if in_conda:
+            return True, f"✅ Running on Windows with conda environment: {os.environ.get('CONDA_DEFAULT_ENV')}"
+        else:
+            return False, (
+                "⚠️  Running on Windows WITHOUT conda!\n"
+                "      Windows users should use conda/mamba for GDAL dependencies.\n"
+                "      See WINDOWS_INSTALL.md or run: install-windows.bat"
+            )
+    return True, f"✅ Running on {sys.platform}"
+
 def main():
     """Run all validation checks."""
     print("=" * 70)
@@ -123,6 +154,18 @@ def main():
     print()
 
     all_passed = True
+    is_windows = sys.platform.startswith('win')
+
+    # Platform check
+    print("📌 Platform:")
+    passed, msg = check_windows_platform()
+    print(f"  {msg}")
+    if not passed:
+        print()
+        print("  ⚠️  WARNING: You may encounter DLL errors with rasterio/GDAL!")
+        print()
+    all_passed = all_passed and passed
+    print()
 
     # Python version
     print("📌 Python Version:")
@@ -175,18 +218,31 @@ def main():
     print("=" * 70)
     if all_passed:
         print("✅ All critical checks passed! You can run the app with:")
-        print("   streamlit run app/main.py")
+        if is_windows:
+            print("   streamlit run app\\main.py")
+        else:
+            print("   streamlit run app/main.py")
         print()
         print("ℹ️  Note: You may need to authenticate with Google Earth Engine")
         print("   on first run via the browser.")
     else:
         print("❌ Some checks failed. Please fix the issues above.")
         print()
-        print("Quick fix steps:")
-        print("  1. Run: ./install.sh")
-        print("  2. Copy: cp .env.example .env")
-        print("  3. Edit .env and add your GEE_PROJECT_ID")
-        print("  4. Run this script again to verify")
+        if is_windows:
+            print("Windows Quick fix steps:")
+            print("  1. Install Mambaforge: https://github.com/conda-forge/miniforge")
+            print("  2. Run: install-windows.bat")
+            print("  3. Copy: copy .env.example .env")
+            print("  4. Edit .env and add your GEE_PROJECT_ID")
+            print("  5. Run this script again to verify")
+            print()
+            print("📖 See WINDOWS_INSTALL.md for detailed instructions")
+        else:
+            print("Quick fix steps:")
+            print("  1. Run: ./install.sh")
+            print("  2. Copy: cp .env.example .env")
+            print("  3. Edit .env and add your GEE_PROJECT_ID")
+            print("  4. Run this script again to verify")
     print("=" * 70)
 
     return 0 if all_passed else 1

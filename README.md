@@ -11,9 +11,12 @@ A semantic search engine for satellite imagery using DOFA-CLIP (Dynamic One-For-
 
 ## Installation
 
-### Quick Start (Recommended)
+> **Windows Users:** Windows requires special installation steps due to GDAL dependencies.
+> **[📖 See detailed Windows installation guide →](WINDOWS_INSTALL.md)**
 
-The easiest way to install is using the provided script (requires [uv](https://github.com/astral-sh/uv)):
+### Quick Start (Linux/Mac)
+
+The easiest way to install on Linux/Mac is using the provided script (requires [uv](https://github.com/astral-sh/uv)):
 
 ```bash
 # 1. Clone the repository
@@ -35,9 +38,9 @@ python validate_installation.py
 streamlit run app/main.py
 ```
 
-### Manual Installation (Alternative)
+### Manual Installation (Linux/Mac)
 
-If you prefer manual setup or are on Windows:
+If you prefer manual setup:
 
 ```bash
 # 1. Create virtual environment
@@ -46,8 +49,6 @@ python -m venv venv
 # 2. Activate virtual environment
 # On Linux/Mac:
 source venv/bin/activate
-# On Windows:
-venv\Scripts\activate
 
 # 3. Install DOFA-CLIP fork (CRITICAL - must be done first!)
 git clone https://github.com/xiong-zhitong/DOFA-CLIP.git
@@ -71,14 +72,26 @@ python validate_installation.py
 ```bash
 # Activate your virtual environment first (if not already active)
 source venv/bin/activate  # Linux/Mac
-# or
-venv\Scripts\activate  # Windows
 
 # Run the app
 streamlit run app/main.py
 
 # Or use the convenience script
 python run.py
+```
+
+### Windows Installation
+
+**Windows users must use conda/mamba** due to GDAL binary dependencies.
+
+**[📖 See complete Windows installation guide →](WINDOWS_INSTALL.md)**
+
+Quick summary:
+```cmd
+# Install Mambaforge, then:
+install-windows.bat
+conda activate embeddedearth
+streamlit run app\main.py
 ```
 
 ## Requirements
@@ -104,6 +117,17 @@ EmbeddedEarth uses Google Earth Engine (GEE) to fetch satellite imagery. You'll 
     - Follow the browser authentication flow.
 
 ## Troubleshooting
+
+### Windows: "DLL load failed while importing _base"
+
+**This is the most common Windows error.** It's caused by GDAL/rasterio binary dependencies.
+
+**Solution:** Use conda instead of pip. See **[WINDOWS_INSTALL.md](WINDOWS_INSTALL.md)** for detailed instructions.
+
+```cmd
+# Quick fix:
+install-windows.bat
+```
 
 ### "ModuleNotFoundError: No module named 'open_clip'"
 
