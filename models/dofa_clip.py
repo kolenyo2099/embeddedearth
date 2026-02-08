@@ -25,7 +25,23 @@ from models.wavelengths import get_wavelength_tensor
 # WRAPPER (Updated for OpenCLIP with Custom DOFA Components)
 # =============================================================================
 
-import open_clip
+try:
+    import open_clip
+except ImportError as e:
+    print("\n" + "=" * 70)
+    print("ERROR: DOFA-CLIP dependency not installed!")
+    print("=" * 70)
+    print("\nThe custom 'open_clip' fork is required but not found.")
+    print("\nTo fix this, run the installation script:")
+    print("  ./install.sh")
+    print("\nOr manually install:")
+    print("  git clone https://github.com/xiong-zhitong/DOFA-CLIP.git")
+    print("  cd DOFA-CLIP/open_clip")
+    print("  pip install -e .")
+    print("\nFor more details, run: python validate_installation.py")
+    print("=" * 70 + "\n")
+    raise ImportError("DOFA-CLIP (open_clip fork) not installed. See above for installation instructions.") from e
+
 import math
 import torch.nn.functional as F
 

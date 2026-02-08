@@ -11,40 +11,74 @@ A semantic search engine for satellite imagery using DOFA-CLIP (Dynamic One-For-
 
 ## Installation
 
+### Quick Start (Recommended)
+
 The easiest way to install is using the provided script (requires [uv](https://github.com/astral-sh/uv)):
 
 ```bash
-# Clone the repository
+# 1. Clone the repository
 git clone https://github.com/yourusername/EmbeddedEarth.git
 cd EmbeddedEarth
 
-# Run installation script
+# 2. Run installation script
 chmod +x install.sh
 ./install.sh
+
+# 3. Configure environment variables
+cp .env.example .env
+# Edit .env and add your GEE_PROJECT_ID
+
+# 4. Validate installation
+python validate_installation.py
+
+# 5. Run the app
+streamlit run app/main.py
 ```
 
-Alternatively, manual installation:
+### Manual Installation (Alternative)
+
+If you prefer manual setup or are on Windows:
 
 ```bash
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate
+# 1. Create virtual environment
+python -m venv venv
 
-# Install DOFA-CLIP fork
+# 2. Activate virtual environment
+# On Linux/Mac:
+source venv/bin/activate
+# On Windows:
+venv\Scripts\activate
+
+# 3. Install DOFA-CLIP fork (CRITICAL - must be done first!)
 git clone https://github.com/xiong-zhitong/DOFA-CLIP.git
 cd DOFA-CLIP/open_clip
 pip install -e .
 cd ../..
 
-# Install dependencies
+# 4. Install other dependencies
 pip install -r requirements.txt
+
+# 5. Configure environment
+cp .env.example .env
+# Edit .env and add your GEE_PROJECT_ID
+
+# 6. Validate installation
+python validate_installation.py
 ```
 
 ## Usage
 
 ```bash
-# Run the Streamlit app
+# Activate your virtual environment first (if not already active)
+source venv/bin/activate  # Linux/Mac
+# or
+venv\Scripts\activate  # Windows
+
+# Run the app
 streamlit run app/main.py
+
+# Or use the convenience script
+python run.py
 ```
 
 ## Requirements
@@ -68,6 +102,52 @@ EmbeddedEarth uses Google Earth Engine (GEE) to fetch satellite imagery. You'll 
     - Enter your Project ID in the app sidebar.
     - Click "Connect to GEE".
     - Follow the browser authentication flow.
+
+## Troubleshooting
+
+### "ModuleNotFoundError: No module named 'open_clip'"
+
+This is the most common issue. The custom DOFA-CLIP fork must be installed separately:
+
+```bash
+git clone https://github.com/xiong-zhitong/DOFA-CLIP.git
+cd DOFA-CLIP/open_clip
+pip install -e .
+cd ../..
+```
+
+### App works on one machine but not another
+
+Common causes:
+1. **Missing DOFA-CLIP installation** - Must be cloned and installed on each machine
+2. **Missing .env file** - Copy `.env.example` to `.env` and configure `GEE_PROJECT_ID`
+3. **Missing GEE authentication** - Run the app once and follow browser authentication
+4. **Different Python versions** - Requires Python 3.8+
+
+**Solution:** Run `python validate_installation.py` to diagnose issues
+
+### "Earth Engine not initialized"
+
+You need to authenticate with Google Earth Engine:
+1. Get your Project ID from [Google Cloud Console](https://console.cloud.google.com)
+2. Add it to `.env` as `GEE_PROJECT_ID=your-project-id`
+3. Run the app and follow the browser authentication flow
+
+### Slow performance
+
+By default, the app uses CPU. To enable GPU acceleration:
+1. Install CUDA-compatible PyTorch
+2. Set `USE_GPU=true` in your `.env` file
+
+### Installation validation
+
+To check if everything is set up correctly:
+
+```bash
+python validate_installation.py
+```
+
+This script will identify missing dependencies, configuration issues, and provide fix instructions.
 
 ## License
 

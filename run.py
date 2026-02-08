@@ -31,8 +31,23 @@ def main():
         import geemap
         import open_clip
     except ImportError as e:
-        print(f"❌ Missing dependency: {e.name}")
-        print("Please run: ./install.sh")
+        print("\n" + "=" * 70)
+        print(f"❌ Missing critical dependency: {e.name}")
+        print("=" * 70)
+        if e.name == 'open_clip':
+            print("\nThe custom 'open_clip' fork (DOFA-CLIP) is required.")
+            print("\nTo fix this, run the installation script:")
+            print("  ./install.sh")
+            print("\nOr manually install:")
+            print("  git clone https://github.com/xiong-zhitong/DOFA-CLIP.git")
+            print("  cd DOFA-CLIP/open_clip")
+            print("  pip install -e .")
+        else:
+            print(f"\nPlease install missing dependency:")
+            print("  pip install -r requirements.txt")
+        print("\nFor detailed diagnostics, run:")
+        print("  python validate_installation.py")
+        print("=" * 70 + "\n")
         sys.exit(1)
         
     # Run Streamlit
