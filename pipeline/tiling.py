@@ -6,6 +6,7 @@ for processing large satellite imagery.
 """
 
 import numpy as np
+import math
 from typing import List, Tuple, Iterator, Optional
 from dataclasses import dataclass
 
@@ -87,8 +88,15 @@ class TileGenerator:
         C, H, W = image.shape
         
         # Calculate number of tiles in each dimension
-        n_tiles_y = max(1, (H - self.tile_size) // self.stride + 1)
-        n_tiles_x = max(1, (W - self.tile_size) // self.stride + 1)
+        if H <= self.tile_size:
+            n_tiles_y = 1
+        else:
+            n_tiles_y = int(math.ceil((H - self.tile_size) / self.stride)) + 1
+
+        if W <= self.tile_size:
+            n_tiles_x = 1
+        else:
+            n_tiles_x = int(math.ceil((W - self.tile_size) / self.stride)) + 1
         
         for ty in range(n_tiles_y):
             for tx in range(n_tiles_x):
@@ -128,30 +136,31 @@ class TileGenerator:
                     # c' = c + a*x + b*y
                     # f' = f + d*x + e*y
                     # Assuming standard north-up raster: a>0, e<0, b=d=0 usually
-                    
+
                     # Manual calculation if transform allows it (rasterio Affine object)
                     try:
                         tile_transform = transform * transform.translation(x, y)
-                        
+
                         # Calculate bounds from transform
                         # (0,0) -> (w, h) in tile specific coords
                         minx, maxy = tile_transform * (0, 0)
                         maxx, miny = tile_transform * (w_slice, h_slice)
                         tile_bounds = (minx, miny, maxx, maxy)
-                    except:
-                        pass
-                
+                    except (AttributeError, TypeError) as e:
+                        print(f"[WARN] Tile transform failed at ({x},{y}): {e}")
+
                 elif bounds:
-                    # Fallback to linear interpolation of bounds if no transform
+                    # Fallback to linear interpolation of bounds if no transform.
+                    # Pixel-y grows downward but lat grows upward: row y=0 maps to maxy.
                     b_minx, b_miny, b_maxx, b_maxy = bounds
                     px_to_geo_x = (b_maxx - b_minx) / W
                     px_to_geo_y = (b_maxy - b_miny) / H
-                    
+
                     tile_bounds = (
                         b_minx + x * px_to_geo_x,
-                        b_miny + y * px_to_geo_y,
+                        b_maxy - (y + h_slice) * px_to_geo_y,
                         b_minx + (x + w_slice) * px_to_geo_x,
-                        b_miny + (y + h_slice) * px_to_geo_y
+                        b_maxy - y * px_to_geo_y,
                     )
                 
                 yield Tile(

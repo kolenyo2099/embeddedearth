@@ -150,6 +150,18 @@ def get_rgb_visualization(
     """
     bands = bands or sentinel2_bands.band_names
     
+    # If there are fewer than 3 channels (e.g., Sentinel-1 VV/VH), create a safe pseudo-RGB.
+    c = data.shape[0]
+    if c == 1:
+        gray = np.clip(data[0] * brightness_factor, 0, 1)
+        rgb = np.stack([gray, gray, gray], axis=-1)
+        return (rgb * 255).astype(np.uint8)
+    if c == 2:
+        ch0 = np.clip(data[0] * brightness_factor, 0, 1)
+        ch1 = np.clip(data[1] * brightness_factor, 0, 1)
+        rgb = np.stack([ch0, ch1, ch0], axis=-1)
+        return (rgb * 255).astype(np.uint8)
+
     # Find RGB band indices (B4=Red, B3=Green, B2=Blue)
     try:
         r_idx = bands.index('B4')

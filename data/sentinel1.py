@@ -116,55 +116,16 @@ class Sentinel1Retriever:
     
     def normalize_for_model(self, image: ee.Image) -> ee.Image:
         """
-        Normalize image for DOFA-CLIP input.
-        
-        Sentinel-1 GRD in GEE is usually in decibels (dB) ranges approx -30 to 0.
-        Or linear? 
-        The 'COPERNICUS/S1_GRD' collection description says: 
-        "Each scene ... processed to generate a level-1 Ground Range Detected (GRD) product."
-        It contains 3 bands: HH, HV, or VV, VH...
-        Wait, GEE provides them as calibrated backscatter coefficient (sigma-naught) in dB? 
-        Actually, the default is raw power/intensity? No, usually linear.
-        However, it's common to convert to dB for visualization: 10*log10(x).
-        
-        For DOFA, we should check if it expects dB or linear.
-        The paper typically uses inputs normalized to 0-1 for stability.
-        
-        Let's assume linear input for physical modeling, but usually range is 0 to ~0.5.
-        If inputs are dB (-25 to 0), we should probably scale them.
-        
-        For now, let's just clamp and scale to 0-1 range for a "visual-like" input if generic.
-        But DOFA is a Foundation Model, might expect raw physical values.
-        
-        Let's try a safe normalization strategy:
-        Clip to [-25, 0] dB and map to [0, 1].
-        
-        BUT GEE S1_GRD values are float.
-        If they are not in dB, they are linear.
-        Usually GEE S1 is not in dB by default unless 'COPERNICUS/S1_GRD_FLOAT' (deprecated) or verified.
-        Checking GEE docs: processed sigma0 values.
-        
-        Let's stick to a robust min-max like normalization for now:
-        VH: [-30, -5] -> [0, 1]
-        VV: [-25, 0] -> [0, 1]
-        
-        Wait, if the values are linear, we should convert to dB first.
-        It is safer to convert to dB.
+        Normalize Sentinel-1 GRD imagery to [0, 1] for DOFA-CLIP input.
+
+        GEE's `COPERNICUS/S1_GRD` delivers sigma-naught already in decibels
+        (negative floats, typically VV in ~[-25, 0] and VH in ~[-30, -5]).
+        We clip to [-25, 0] dB and linearly rescale to [0, 1]. No log10
+        conversion — the values are already log-scaled.
         """
-        # Convert to dB if not already (assuming linear if values are small positive)
-        # Actually S1 GRD in GEE is linear power.
-        
-        # 10 * log10(x)
-        image_db = image.log10().multiply(10.0)
-        
-        # Clip and Scale to 0-1
-        # VV: range [-25, 0]
-        # VH: range [-30, -5]
-        
         min_db = -25.0
         max_db = 0.0
-        
-        return image_db.subtract(min_db).divide(max_db - min_db).clamp(0, 1)
+        return image.subtract(min_db).divide(max_db - min_db).clamp(0, 1)
 
     def get_visualization(self, image: ee.Image) -> ee.Image:
         """

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import sys
 sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
-from config import search_config
+from config import search_config, model_config
 
 
 @dataclass
@@ -34,15 +34,14 @@ class FAISSIndex:
     
     def __init__(
         self,
-        dimension: int = 768,
+        dimension: int = model_config.embedding_dim,
         index_type: str = None
     ):
         """
         Initialize the FAISS index.
-        
+
         Args:
-        Args:
-            dimension: Vector dimension (768 for DOFA-CLIP/ViT-B).
+            dimension: Vector dimension (1152 for the default DOFA-CLIP SigLIP ViT-14).
             index_type: FAISS index type.
         """
         self.dimension = dimension
@@ -94,14 +93,18 @@ class FAISSIndex:
             vectors = vectors.reshape(1, -1)
         
         vectors = vectors.astype(np.float32)
-        
+
         # FAISS requires contiguous arrays
         if not vectors.flags['C_CONTIGUOUS']:
             vectors = np.ascontiguousarray(vectors)
-        
+
         # Get starting index
         start_idx = self._count
-        
+
+        # IVF-based indexes must be trained before the first .add()
+        if hasattr(self._index, 'is_trained') and not self._index.is_trained:
+            self._index.train(vectors)
+
         # Add to index
         self._index.add(vectors)
         
@@ -192,7 +195,7 @@ class FAISSIndex:
 _global_index: Optional[FAISSIndex] = None
 
 
-def get_index(dimension: int = 768) -> FAISSIndex:
+def get_index(dimension: int = model_config.embedding_dim) -> FAISSIndex:
     """
     Get or create the global FAISS index.
     

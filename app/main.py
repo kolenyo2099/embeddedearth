@@ -10,6 +10,8 @@ Run with: streamlit run app/main.py
 import streamlit as st
 import numpy as np
 from datetime import datetime
+import io
+from PIL import Image
 
 import sys
 from pathlib import Path
@@ -57,6 +59,7 @@ def initialize_session_state():
         'search_results': None,
         'current_query': None,
         'processing': False,
+        'search_diagnostics': None,
     }
     
     for key, value in defaults.items():
@@ -226,7 +229,10 @@ def render_main_content():
                     with st.spinner("🔍 Searching..."):
                         results = run_search(aoi, search_params)
                         st.session_state.search_results = results
-                        st.session_state.current_query = search_params.query
+                        if search_params.search_type == "image":
+                            st.session_state.current_query = "Reference Image Search"
+                        else:
+                            st.session_state.current_query = search_params.query
                     
                     if results:
                         announce_to_screen_reader(f"Found {len(results)} results.")
@@ -252,11 +258,13 @@ def render_main_content():
                             start_date=zs_params['start_date'].strftime('%Y-%m-%d'),
                             end_date=zs_params['end_date'].strftime('%Y-%m-%d'),
                             query_vector=zs_params['query_vector'],
+                            sensor=zs_params['sensor'],
                             threshold=zs_params['threshold'],
                             hf_token=zs_params['token']
                         )
                         st.session_state.search_results = results
                         st.session_state.current_query = "Zero-Shot Pattern"
+                        st.session_state.search_diagnostics = None
                         
                         if results:
                              st.success(f"Found {len(results)} matches!")
@@ -302,6 +310,7 @@ def render_main_content():
 
                         st.session_state.search_results = results
                         st.session_state.current_query = f"CopernicusFM ({cop_params.sensor})"
+                        st.session_state.search_diagnostics = None
                         
                         if results:
                             st.success(f"Found {len(results)} matches!")
@@ -321,6 +330,7 @@ def render_main_content():
     if st.session_state.search_results:
         results = st.session_state.search_results
         render_result_grid(results)
+        _render_search_diagnostics_panel()
     else:
         st.info(
             "👋 **Getting Started**\n\n"
@@ -328,6 +338,49 @@ def render_main_content():
             "2. Enter a search query (e.g., 'solar panels', 'deforestation')\n"
             "3. Click Search to find matching locations"
         )
+
+
+def _render_search_diagnostics_panel():
+    """Render collapsed diagnostics for semantic search pipeline."""
+    diag = st.session_state.get('search_diagnostics')
+    if not diag:
+        return
+
+    with st.expander("🧪 Search Diagnostics", expanded=False):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Sensor", diag.get('sensor', 'N/A'))
+        c2.metric("Query Type", diag.get('query_type', 'N/A'))
+        c3.metric("Query Norm", f"{diag.get('query_norm', 0.0):.4f}")
+        c4.metric("Embedding Dim", str(diag.get('embedding_dim', 'N/A')))
+
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Total Tiles", str(diag.get('total_tiles', 0)))
+        c6.metric("Valid Tiles", str(diag.get('valid_tiles', 0)))
+        c7.metric("Scored Tiles", str(diag.get('scored_tiles', 0)))
+        c8.metric("Above Threshold", str(diag.get('above_threshold', 0)))
+
+        st.markdown(
+            f"**Similarity stats**  "
+            f"min={diag.get('sim_min', 0.0):.4f}, "
+            f"mean={diag.get('sim_mean', 0.0):.4f}, "
+            f"median={diag.get('sim_median', 0.0):.4f}, "
+            f"max={diag.get('sim_max', 0.0):.4f}, "
+            f"std={diag.get('sim_std', 0.0):.4f}"
+        )
+
+        hist_counts = diag.get('similarity_histogram_counts', [])
+        hist_edges = diag.get('similarity_histogram_edges', [])
+        if hist_counts:
+            st.caption(
+                f"Similarity histogram ({len(hist_counts)} bins). "
+                f"Range: {hist_edges[0]:.4f} -> {hist_edges[-1]:.4f}"
+            )
+            st.bar_chart(np.array(hist_counts, dtype=np.int32))
+
+        top_scores = diag.get('top_scores', [])
+        if top_scores:
+            score_preview = ", ".join(f"{s:.4f}" for s in top_scores)
+            st.caption(f"Top scores: {score_preview}")
 
 
 def run_search(aoi_geojson: dict, params) -> list:
@@ -357,6 +410,7 @@ def run_search(aoi_geojson: dict, params) -> list:
     print(f"[DEBUG SEARCH] Query: {params.query}")
     
     results = []
+    st.session_state.search_diagnostics = None
     
     try:
         # Step 1: Initialize GEE if needed
@@ -378,11 +432,22 @@ def run_search(aoi_geojson: dict, params) -> list:
         
         print(f"[DEBUG SEARCH] EE Geometry created: {aoi_ee.getInfo()}")
         
-        # Step 3: Fetch Sentinel-2 imagery
-        st.info("🛰️ Fetching Sentinel-2 imagery from Google Earth Engine...")
-        
-        from data.sentinel2 import Sentinel2Retriever
-        retriever = Sentinel2Retriever()
+        # Step 3: Fetch imagery for selected sensor
+        sensor = getattr(params, "sensor", "Sentinel-2")
+        st.info(f"🛰️ Fetching {sensor} imagery from Google Earth Engine...")
+
+        if sensor == "Sentinel-1":
+            from data.sentinel1 import Sentinel1Retriever
+            from config import sentinel1_bands
+            retriever = Sentinel1Retriever()
+            bands_to_download = sentinel1_bands.band_names
+            encoder_wavelengths = sentinel1_bands.get_wavelength_tensor()
+        else:
+            from data.sentinel2 import Sentinel2Retriever
+            from config import sentinel2_bands
+            retriever = Sentinel2Retriever()
+            bands_to_download = sentinel2_bands.band_names
+            encoder_wavelengths = sentinel2_bands.get_wavelength_tensor()
         
         # Date range from params
         start_date = params.start_date.strftime('%Y-%m-%d') if params.start_date else None
@@ -391,7 +456,7 @@ def run_search(aoi_geojson: dict, params) -> list:
         print(f"[DEBUG SEARCH] Date range: {start_date} to {end_date}")
         
         # Save query for Verification tools
-        st.session_state.last_query = params.query
+        st.session_state.last_query = params.query if params.search_type == "text" else "Reference Image Search"
         st.session_state.last_search_dates = (start_date, end_date)
         
         composite = retriever.get_composite(aoi_ee, start_date, end_date)
@@ -427,8 +492,9 @@ def run_search(aoi_geojson: dict, params) -> list:
         meters_width = deg_width * 111320
         meters_height = deg_height * 111320
         
-        # Tile size in meters at target res
-        tile_m = 384 * target_resolution
+        # Tile size in meters at target res (chip_size controls geo coverage per chip)
+        chip_size = getattr(params, 'chip_size', 384)
+        tile_m = chip_size * target_resolution
         stride_m = tile_m * 0.5 # 50% overlap
         
         # Estimated tiles (Width / Stride) * (Height / Stride)
@@ -443,26 +509,41 @@ def run_search(aoi_geojson: dict, params) -> list:
              st.error(f"🛑 Too many tiles ({int(total_est_tiles)}). Please reduce the area or increase resolution to >{target_resolution}m.")
              return []
         
-        grid_tiles = list(generate_geo_grid(bounds, resolution=target_resolution))
-        st.write(f"Created grid with {len(grid_tiles)} tiles (Resolution: {target_resolution}m/px).")
+        grid_tiles = list(generate_geo_grid(bounds, resolution=target_resolution, tile_size=chip_size))
+        chip_coverage_m = int(chip_size * target_resolution)
+        st.write(f"Created grid with {len(grid_tiles)} tiles (Resolution: {target_resolution}m/px, Chip: ~{chip_coverage_m}×{chip_coverage_m}m).")
         
         if len(grid_tiles) > 20000:
              st.error("Area is still too big! Please select a smaller region.")
              return []
         
         # Initialize models once
-        # DEBUG: Force reload to pick up new code/patches
-        from models import dofa_clip
-        import importlib
-        importlib.reload(dofa_clip)
-        dofa_clip._model_instance = None
-        print("[DEBUG] Forcing model reload (Module Reloaded)...")
+        text_encoder, _ = create_encoders()
+        _, image_encoder = create_encoders(
+            model=text_encoder.model,
+            wavelengths=encoder_wavelengths
+        )
+
+        if params.search_type == "image":
+            if not params.reference_image:
+                st.error("Reference image search selected, but no image was provided.")
+                return []
+
+            ref_img = Image.open(io.BytesIO(params.reference_image)).convert("RGB")
+            ref_arr = np.asarray(ref_img, dtype=np.float32) / 255.0
+            ref_arr = np.transpose(ref_arr, (2, 0, 1))
+
+            # Approximate RGB wavelength mapping (R,G,B in nm).
+            _, ref_encoder = create_encoders(
+                model=text_encoder.model,
+                wavelengths=[665.0, 560.0, 490.0]
+            )
+            query_embedding = ref_encoder.encode(ref_arr)
+        else:
+            query_embedding = text_encoder.encode(params.query)
         
-        text_encoder, image_encoder = create_encoders()
-        query_embedding = text_encoder.encode(params.query)
-        
-        # DEBUG: Check text stats
-        print(f"[DEBUG SEARCH] Text embedding stats: min={query_embedding.min():.4f}, max={query_embedding.max():.4f}, mean={query_embedding.mean():.4f}, norm={np.linalg.norm(query_embedding):.4f}")
+        # DEBUG: Check query embedding stats
+        print(f"[DEBUG SEARCH] Query embedding stats: min={query_embedding.min():.4f}, max={query_embedding.max():.4f}, mean={query_embedding.mean():.4f}, norm={np.linalg.norm(query_embedding):.4f}")
         
         # Optimize: Define a processing function for parallel execution
         # We process-and-forget: Download -> Encode -> Discard Image -> Keep Embedding
@@ -474,21 +555,20 @@ def run_search(aoi_geojson: dict, params) -> list:
                 # print(f"[DEBUG WORKER] Tile {idx} bounds: {t_bounds}") # Commented out to reduce noise, enable if needed
                 tile_geom = ee.Geometry.Rectangle([t_minx, t_miny, t_maxx, t_maxy])
                 
-                # Fetch composite
-                # Note: We must create a new retriever instance or ensure it's thread-safe?
-                # The retriever just calls GEE methods so it should be fine.
-                tile_composite = retriever.get_composite(tile_geom, start_date, end_date)
-                tile_composite = retriever.normalize_for_model(tile_composite)
-                
                 # Download (expensive network IO)
-                tile_data = download_image_as_array(tile_composite, tile_geom, scale=target_resolution)
+                tile_data = download_image_as_array(
+                    composite,
+                    tile_geom,
+                    bands=bands_to_download,
+                    scale=target_resolution
+                )
                 
                 if tile_data.max() == 0:
                     return None
                     
-                # Double-norm fix: REMOVED manual normalization here.
-                # prepare_for_model handles the scaling from 10000 -> 1.
-                
+                # Data is already in [0, 1]: composite was normalized server-side by
+                # retriever.normalize_for_model() (GEE .divide(scale_factor)).
+                # prepare_for_model() only resizes to the model's input resolution.
                 from data.preprocessing import prepare_for_model
                 tile_data = prepare_for_model(tile_data)
                 
@@ -502,13 +582,15 @@ def run_search(aoi_geojson: dict, params) -> list:
                      
                 # Encode (expensive CPU/GPU)
                 emb = image_encoder.encode_batch([tile_data])
+                if not np.all(np.isfinite(emb)):
+                    return None
                 
                 # Metadata only, NO DATA to save RAM
                 tile_meta = Tile(
-                    x=col*192,
-                    y=row*192,
-                    width=384,
-                    height=384,
+                    x=col * (chip_size // 2),
+                    y=row * (chip_size // 2),
+                    width=chip_size,
+                    height=chip_size,
                     data=None, # Process-and-Forget!
                     bounds=t_bounds
                 )
@@ -573,11 +655,42 @@ def run_search(aoi_geojson: dict, params) -> list:
         
         # Cosine similarity
         similarities = np.dot(tile_embeddings, query_embedding.T).flatten()
+
+        sim_min = float(np.min(similarities))
+        sim_max = float(np.max(similarities))
+        sim_mean = float(np.mean(similarities))
+        sim_median = float(np.median(similarities))
+        sim_std = float(np.std(similarities))
+        above_threshold = int(np.sum(similarities >= params.similarity_threshold))
+        hist_counts, hist_edges = np.histogram(similarities, bins=10)
+
+        st.session_state.search_diagnostics = {
+            'source': 'semantic',
+            'sensor': sensor,
+            'query_type': params.search_type,
+            'query_norm': float(np.linalg.norm(query_embedding)),
+            'embedding_dim': int(query_embedding.shape[-1]) if query_embedding.ndim > 1 else int(query_embedding.shape[0]),
+            'total_tiles': int(total_tiles),
+            'valid_tiles': int(len(processed_tiles)),
+            'scored_tiles': int(len(similarities)),
+            'above_threshold': above_threshold,
+            'sim_min': sim_min,
+            'sim_mean': sim_mean,
+            'sim_median': sim_median,
+            'sim_max': sim_max,
+            'sim_std': sim_std,
+            'similarity_histogram_counts': hist_counts.tolist(),
+            'similarity_histogram_edges': hist_edges.tolist(),
+            'top_scores': np.sort(similarities)[::-1][:10].tolist(),
+            'threshold': float(params.similarity_threshold),
+        }
         
-        # Get top-k indices
-        top_k = min(params.top_k, len(processed_tiles))
-        top_indices = np.argsort(similarities)[::-1][:top_k]
-        
+        # Filter by threshold first, then take top-k of what remains.
+        passing = np.where(similarities >= params.similarity_threshold)[0]
+        passing_sorted = passing[np.argsort(similarities[passing])[::-1]]
+        top_k = min(params.top_k, len(passing_sorted))
+        top_indices = passing_sorted[:top_k]
+
         # Step 8: Re-fetch and Generate Explanations
         st.info(f"🔥 Fetching full details for top {top_k} matches...")
         
@@ -594,26 +707,22 @@ def run_search(aoi_geojson: dict, params) -> list:
             score = float(similarities[idx])
             
             print(f"[DEBUG SEARCH] Processing result {rank+1}: tile {idx}, score {score:.3f}")
-            
-            if score < params.similarity_threshold:
-                print(f"[DEBUG SEARCH] Skipping tile {idx}: score {score:.3f} < threshold {params.similarity_threshold}")
-                continue
-                
+
             # Re-download the specific tile data!
             # We need the geometry again
             t_minx, t_miny, t_maxx, t_maxy = tile.bounds
-            t_minx, t_miny, t_maxx, t_maxy = tile.bounds
             tile_geom = ee.Geometry.Rectangle([t_minx, t_miny, t_maxx, t_maxy])
             
-            # Fetch fresh composite
-            tile_composite = retriever.get_composite(tile_geom, start_date, end_date)
-            tile_composite = retriever.normalize_for_model(tile_composite)
-            
             # Download again (only for these few winners)
-            tile_data = download_image_as_array(tile_composite, tile_geom, scale=target_resolution)
+            tile_data = download_image_as_array(
+                composite,
+                tile_geom,
+                bands=bands_to_download,
+                scale=target_resolution
+            )
             
-            # REMOVED double normalization check. prepare_for_model does it.
-            
+            # Data is already [0, 1] — composite was normalized via normalize_for_model().
+            # prepare_for_model() only resizes.
             from data.preprocessing import prepare_for_model
             tile_data = prepare_for_model(tile_data)
             
@@ -621,14 +730,25 @@ def run_search(aoi_geojson: dict, params) -> list:
             tile.data = tile_data
             
             # Visualization
-            rgb_image = get_rgb_visualization(tile.data)
+            rgb_image = get_rgb_visualization(tile.data, bands=bands_to_download)
             
             # Heatmap
             try:
-                heatmap = generate_explanation(model_wrapper, tile.data, params.query)
+                if params.search_type == "text":
+                    # Pass the encoder's wavelength tensor (already in μm, correct sensor)
+                    # so Grad-CAM uses the same wavelengths that were used for embedding.
+                    heatmap = generate_explanation(
+                        model_wrapper,
+                        tile.data,
+                        params.query,
+                        wavelengths=image_encoder.wavelengths
+                    )
+                else:
+                    heatmap = None  # No Grad-CAM for image-reference search
             except Exception as e:
                 print(f"[WARN] Grad-CAM failed for tile {idx}: {e}")
-                heatmap = np.ones((224, 224)) * score
+                st.warning(f"Explanation unavailable for result {rank+1}: {e}")
+                heatmap = None
             
             results.append({
                 'image': rgb_image,
@@ -648,6 +768,7 @@ def run_search(aoi_geojson: dict, params) -> list:
         print(f"[DEBUG SEARCH] ERROR: {error_msg}")
         print(f"[DEBUG SEARCH] Traceback:\n{traceback.format_exc()}")
         st.error(error_msg)
+        st.session_state.search_diagnostics = None
         
         # Show debug info
         with st.expander("🔧 Error Details"):

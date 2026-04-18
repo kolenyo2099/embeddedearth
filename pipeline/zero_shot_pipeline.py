@@ -19,6 +19,7 @@ def run_zero_shot_pipeline(
     start_date: str,
     end_date: str,
     query_vector: torch.Tensor,
+    sensor: str = "Sentinel-2",
     threshold: float = 0.5,
     resolution: int = 10,
     hf_token: str = None
@@ -55,9 +56,15 @@ def run_zero_shot_pipeline(
         return []
 
     # 3. Fetch Imagery (Target Area)
-    st.info("🛰️ Fetching target Sentinel-2 imagery...")
-    from data.sentinel2 import Sentinel2Retriever
-    retriever = Sentinel2Retriever()
+    st.info(f"🛰️ Fetching target {sensor} imagery...")
+    if sensor == "Sentinel-1":
+        from data.sentinel1 import Sentinel1Retriever
+        retriever = Sentinel1Retriever()
+        bands = ['VV', 'VH']
+    else:
+        from data.sentinel2 import Sentinel2Retriever
+        retriever = Sentinel2Retriever()
+        bands = ['B4', 'B3', 'B2']
     
     if aoi_geojson.get('type') == 'Polygon':
         aoi_ee = ee.Geometry.Polygon(aoi_geojson['coordinates'])
@@ -70,9 +77,12 @@ def run_zero_shot_pipeline(
         col_check = retriever.get_collection(aoi_ee, start_date, end_date)
         count = col_check.size().getInfo()
         if count == 0:
-            st.error(f"❌ No Sentinel-2 imagery found for this area between {start_date} and {end_date}. Try increasing the date range or cloud threshold.")
+            st.error(
+                f"❌ No {sensor} imagery found for this area between {start_date} and {end_date}. "
+                "Try increasing the date range or relaxing filters."
+            )
             return []
-        print(f"[DEBUG] Found {count} Sentinel-2 scenes for the AOI.")
+        print(f"[DEBUG] Found {count} {sensor} scenes for the AOI.")
     except Exception as e:
         print(f"[DEBUG] Collection check failed: {e}")
         # Proceed cautiously? Or stop?
@@ -133,9 +143,7 @@ def run_zero_shot_pipeline(
              tile_comp = retriever.get_composite(tile_geom, start_date, end_date)
              tile_comp = retriever.normalize_for_model(tile_comp)
              
-             # DOWNLOAD OPTIMIZATION: Only fetch RGB bands (B4, B3, B2)
-             rgb_bands = ['B4', 'B3', 'B2']
-             arr = download_image_as_array(tile_comp, tile_geom, bands=rgb_bands, scale=resolution)
+             arr = download_image_as_array(tile_comp, tile_geom, bands=bands, scale=resolution)
         except Exception as e:
              print(f"[DEBUG] Tile {i} download failed: {str(e)[:100]}...") # Log first 100 chars
              continue
@@ -151,6 +159,10 @@ def run_zero_shot_pipeline(
         try:
             # Transpose: (C, H, W) -> (H, W, C)
             arr = np.transpose(arr, (1, 2, 0))
+
+            # DINO expects RGB-like input. Expand Sentinel-1 (VV/VH) to 3 channels.
+            if sensor == "Sentinel-1" and arr.shape[2] == 2:
+                arr = np.stack([arr[:, :, 0], arr[:, :, 1], arr[:, :, 0]], axis=-1)
                 
             # Convert to uint8 0-255 for Processor if currently float 0-1
             if arr.dtype == np.float32 or arr.dtype == np.float64:

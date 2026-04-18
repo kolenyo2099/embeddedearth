@@ -155,8 +155,8 @@ class Sentinel1Bands:
 class ModelConfig:
     """Configuration for DOFA-CLIP model."""
     
-    # Model identifier (for Hugging Face or local path)
-    model_name: str = "XShadow/DOFA-CLIP"
+    # Model identifier — must match the hub ID used in DOFACLIPWrapper
+    model_name: str = "hf-hub:earthflow/GeoLB-ViT-14-SigLIP-so400m-384-EO"
     
     # Vision Transformer settings
     image_size: int = 384

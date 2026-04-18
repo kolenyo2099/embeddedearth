@@ -52,7 +52,7 @@ class TextEncoder:
             normalize: L2-normalize the output.
             
         Returns:
-            Numpy array of shape (batch_size, 768).
+            Numpy array of shape (batch_size, embedding_dim).
         """
         embeddings = self.model.encode_text(text, normalize=normalize)
         return embeddings.cpu().numpy()
@@ -72,17 +72,24 @@ class ImageEncoder:
     def __init__(
         self,
         model: DOFACLIPWrapper = None,
-        bands: List[str] = None
+        bands: List[str] = None,
+        wavelengths: Optional[Union[List[float], torch.Tensor]] = None
     ):
         """
         Initialize the image encoder.
         
         Args:
             model: Optional pre-loaded model instance.
-            bands: Band names for wavelength lookup.
+            bands: Band names for wavelength lookup (e.g. ['B2','B3','B4','B8','B11','B12']).
+            wavelengths: Optional override. Accepted units: nanometers (typical
+                         optical values 400–2500) or micrometers (SAR C-band
+                         ~55500 μm or already-converted optical ~0.4–2.5 μm).
+                         Conversion to μm is handled by
+                         `models.wavelengths.to_micrometers`.
         """
         self._model = model
         self._bands = bands
+        self._manual_wavelengths = wavelengths
         self._wavelengths = None
     
     @property
@@ -94,12 +101,24 @@ class ImageEncoder:
     
     @property
     def wavelengths(self) -> torch.Tensor:
-        """Get wavelength tensor for current bands."""
+        """Get wavelength tensor for current bands, in micrometers (μm)."""
         if self._wavelengths is None:
-            self._wavelengths = get_wavelength_tensor(
-                self._bands,
-                device=self.model.device
-            )
+            from models.wavelengths import to_micrometers
+            if self._manual_wavelengths is not None:
+                if isinstance(self._manual_wavelengths, torch.Tensor):
+                    wl = self._manual_wavelengths.to(self.model.device, dtype=torch.float32)
+                else:
+                    wl = torch.tensor(
+                        self._manual_wavelengths,
+                        dtype=torch.float32,
+                        device=self.model.device
+                    )
+            else:
+                wl = get_wavelength_tensor(
+                    self._bands,
+                    device=self.model.device
+                )
+            self._wavelengths = to_micrometers(wl)
         return self._wavelengths
     
     def encode(
@@ -115,7 +134,7 @@ class ImageEncoder:
             normalize: L2-normalize the output.
             
         Returns:
-            Numpy array of shape (batch_size, 768).
+            Numpy array of shape (batch_size, embedding_dim).
         """
         embeddings = self.model.encode_image(
             images,
@@ -137,7 +156,7 @@ class ImageEncoder:
             batch_size: Batch size for processing.
             
         Returns:
-            Stacked embeddings of shape (N, 768).
+            Stacked embeddings of shape (N, embedding_dim).
         """
         batch_size = batch_size or model_config.batch_size
         
@@ -161,7 +180,8 @@ class ImageEncoder:
 
 def create_encoders(
     model: DOFACLIPWrapper = None,
-    bands: List[str] = None
+    bands: List[str] = None,
+    wavelengths: Optional[Union[List[float], torch.Tensor]] = None
 ) -> tuple:
     """
     Create text and image encoder pair.
@@ -177,6 +197,6 @@ def create_encoders(
         model = get_model()
     
     text_encoder = TextEncoder(model)
-    image_encoder = ImageEncoder(model, bands)
+    image_encoder = ImageEncoder(model, bands, wavelengths=wavelengths)
     
     return text_encoder, image_encoder

@@ -17,21 +17,32 @@ SENTINEL2_WAVELENGTHS: Dict[str, int] = {
     'B02': 490,   # Blue
     'B03': 560,   # Green
     'B04': 665,   # Red
-    
+
     # Red Edge
     'B05': 705,   # Vegetation Red Edge 1
     'B06': 740,   # Vegetation Red Edge 2
     'B07': 783,   # Vegetation Red Edge 3
-    
+
     # Near-Infrared
     'B08': 842,   # NIR
     'B8A': 865,   # Vegetation Red Edge 4
-    
+
     # Short-Wave Infrared
     'B09': 945,   # Water Vapour
     'B10': 1375,  # SWIR - Cirrus
     'B11': 1610,  # SWIR 1
     'B12': 2190,  # SWIR 2
+
+    # Non-zero-padded aliases used by GEE band names (B2, B3, ...) and config.py
+    'B1':  443,
+    'B2':  490,
+    'B3':  560,
+    'B4':  665,
+    'B5':  705,
+    'B6':  740,
+    'B7':  783,
+    'B8':  842,
+    'B9':  945,
 }
 
 # Default bands for DOFA-CLIP (6-band configuration)
@@ -58,34 +69,38 @@ def get_wavelength_tensor(
     device: str = 'cpu'
 ) -> torch.Tensor:
     """
-    Get wavelengths as a PyTorch tensor.
-    
+    Get wavelengths as a PyTorch tensor, in nanometers (nm).
+
+    Call-site conversion to micrometers happens via `to_micrometers` before
+    the tensor is passed into the DOFA trunk.
+
     Args:
         bands: List of band names.
         dtype: Tensor data type.
         device: Target device.
-        
+
     Returns:
-        Tensor of shape (num_bands,).
+        Tensor of shape (num_bands,) in nm.
     """
     wavelengths = get_wavelengths_for_bands(bands)
     return torch.tensor(wavelengths, dtype=dtype, device=device)
 
 
-def normalize_wavelengths(
-    wavelengths: torch.Tensor,
-    min_wl: float = 400.0,
-    max_wl: float = 2500.0
-) -> torch.Tensor:
+def to_micrometers(wavelengths: torch.Tensor) -> torch.Tensor:
     """
-    Normalize wavelengths to [0, 1] range for model input.
-    
-    Args:
-        wavelengths: Tensor of wavelengths in nm.
-        min_wl: Minimum wavelength for normalization.
-        max_wl: Maximum wavelength for normalization.
-        
-    Returns:
-        Normalized wavelength tensor.
+    Convert a wavelength tensor to micrometers (μm).
+
+    Optical Sentinel-2 values are stored as nm (~400–2500). SAR C-band is
+    stored directly as μm (~55500). The heuristic below keeps both working
+    as the single source of truth for unit conversion used across the app.
+
+    - Any value already > 10_000 is assumed μm (SAR) and left untouched.
+    - Any value between 100 and 10_000 is assumed nm and divided by 1000.
+    - Any value < 100 is assumed μm and left untouched.
     """
-    return (wavelengths - min_wl) / (max_wl - min_wl)
+    wl_max = float(wavelengths.max().item())
+    if wl_max > 10_000.0:
+        return wavelengths  # SAR μm already
+    if wl_max >= 100.0:
+        return wavelengths / 1000.0  # nm → μm
+    return wavelengths  # already μm

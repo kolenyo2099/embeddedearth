@@ -73,7 +73,6 @@ def render_result_grid(
             st.rerun()
             
     with control_col3:
-         # Master heatmap toggle
         # Master heatmap toggle
         master_heatmap_key = f"{key_prefix}_master_heatmap"
         show_heatmaps = st.toggle(
@@ -245,7 +244,11 @@ def _render_result_card(
     show_heatmap = default_heatmap_on
     with c2:
         if heatmap is not None:
-            show_heatmap = st.toggle("Heatmap", value=default_heatmap_on, key=f"{key_prefix}_heatmap_{index}") or default_heatmap_on
+            show_heatmap = st.toggle(
+                "Heatmap",
+                value=default_heatmap_on,
+                key=f"{key_prefix}_heatmap_{index}"
+            )
     
     # Apply heatmap
     display_image = create_heatmap_overlay(image, heatmap) if (show_heatmap and heatmap is not None) else image

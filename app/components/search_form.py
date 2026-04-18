@@ -28,6 +28,7 @@ class SearchParameters:
     top_k: int = 10
     similarity_threshold: float = 0.3
     resolution: float = 10.0
+    chip_size: int = 384
     submitted: bool = False
 
 
@@ -142,6 +143,33 @@ def render_search_form(key_prefix: str = "search") -> SearchParameters:
                 step=10.0,
                 help="Resolution in meters per pixel. 10m is standard Sentinel-2 (High Detail). Higher values (e.g. 20m, 60m) are faster but less detailed."
             )
+
+            st.markdown("#### 🔬 Precision Tiling")
+            _CHIP_OPTIONS = {
+                "Broad – ~3.8km/chip (default, fast)": 384,
+                "Narrow – ~1.9km/chip (2× more tiles)": 192,
+                "Precise – ~960m/chip (4× more tiles)": 96,
+                "Ultra – ~480m/chip (8× more tiles)": 48,
+            }
+            tile_mode = st.selectbox(
+                "Chip Coverage",
+                options=list(_CHIP_OPTIONS.keys()),
+                index=0,
+                help=(
+                    "Controls how much geographic area each tile sent to the model covers. "
+                    "Smaller chips mean the model sees a smaller area per tile — better for finding "
+                    "small or local features (e.g. a single building, a small pond). Larger chips "
+                    "preserve scene context and are faster. Coverage shown is at 10m/px."
+                )
+            )
+            params.chip_size = _CHIP_OPTIONS[tile_mode]
+            if params.chip_size < 384:
+                approx_m = int(params.chip_size * params.resolution)
+                st.caption(
+                    f"Precision tiling active: each chip covers ~{approx_m}×{approx_m}m. "
+                    f"Downloaded at {params.chip_size}×{params.chip_size}px, upsampled to 384×384 for the model. "
+                    f"Expect more tiles and longer processing."
+                )
         
         st.divider()
         

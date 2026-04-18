@@ -67,14 +67,7 @@ class CopernicusFM(nn.Module):
 
         return model
 
-    def normalize(self, x: torch.Tensor) -> torch.Tensor:
-        # Standard normalization if required by the model
-        # The demo code didn't show explicit normalization other than what the data loader might do.
-        # Assuming input is [B, C, H, W] in 0-1 range or tailored raw values.
-        # DOFA usually expects normalized inputs.
-        return x
-
-    def forward(self, 
+    def forward(self,
                 x: torch.Tensor, 
                 meta_info: torch.Tensor, 
                 wavelengths: List[float], 

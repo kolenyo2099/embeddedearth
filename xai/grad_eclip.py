@@ -24,15 +24,17 @@ class GradECLIP:
     def __init__(
         self,
         model_wrapper,
-        target_layer_name: str = "trunk.norm"
+        target_layer_name: str = "vision_model.trunk.norm"
     ):
         """
         Initialize Grad-ECLIP.
-        
+
         Args:
             model_wrapper: Instance of DOFACLIPWrapper.
-            target_layer_name: Dot-path to the target attention layer.
-            Default 'trunk.norm' targets the final norm before pooling in OpenCLIP/Timm ViT.
+            target_layer_name: Dot-path to the target layer, traversed from
+                model_wrapper. 'vision_model.trunk.norm' resolves to
+                model_wrapper.vision_model.trunk.norm, i.e. the final LayerNorm
+                of the ViT trunk before global pooling.
         """
         self.wrapper = model_wrapper
         self.model = model_wrapper  # formatting alias
@@ -48,22 +50,11 @@ class GradECLIP:
     def _register_hooks(self):
         """Register forward and backward hooks on the target layer."""
         layer = self._get_layer(self.target_layer_name)
+
         if layer is None:
-            # Fallback for old/custom models or different structures
-            # Try 'visual.trunk.norm' if 'trunk.norm' failed on wrapper.vision_model
-            # Note: _get_layer starts at self.wrapper usually?
-            # self.wrapper.vision_model IS the starting point as per my previous code??
-            # NO, _get_layer implementation uses `self.wrapper`.
-            # self.wrapper.vision_model is `_model.visual`.
-            # So `trunk.norm` should be `vision_model.trunk.norm`.
-            # Let's adjust _get_layer usage or the path.
-            # If I pass "vision_model.trunk.norm", that's safer.
-            print(f"Warning: GradECLIP could not find layer {self.target_layer_name}. Trying explicit path...")
-            layer = self._get_layer("vision_model.trunk.norm")
-        
-        if layer is None:
-             print(f"Error: Could not find target layer for hooks.")
-             return
+            print(f"Error: GradECLIP could not find layer '{self.target_layer_name}'. "
+                  "Heatmaps will be blank.")
+            return
              
         # print(f"GradECLIP: Hooking into {layer}")
         
@@ -117,33 +108,44 @@ class GradECLIP:
         self,
         image: torch.Tensor,
         text: str,
-        image_size: int = 384
+        image_size: int = 384,
+        wavelengths: torch.Tensor = None
     ) -> np.ndarray:
         """
         Generate Grad-CAM Heatmap.
-        
+
         Uses gradients to weight the contribution of each visual token feature channel
         to the final similarity score.
+
+        Args:
+            image: Preprocessed image tensor (B, C, H, W) in [0, 1] range.
+            text: Text query string.
+            image_size: Output heatmap resolution.
+            wavelengths: Band wavelengths in μm (must match the sensor used for
+                         embedding). Defaults to Sentinel-2 if None.
         """
         # 1. Clear previous hooks state
         self._activations = None
         self._gradients = None
-        self.model.model.zero_grad() # Clear model gradients
-        
+        self.model.model.zero_grad()
+
         # 2. Forward Pass: Encode Image
-        # We must enable grad for this pass to trace back to the hooked layer
         with torch.set_grad_enabled(True):
-            # Preprocess using centralized logic (ensures consistency)
             image_tensor = self.wrapper.preprocess_tensor(image, normalize=True)
             if image_tensor.requires_grad is False:
-                image_tensor.requires_grad = True # Allow gradient flow if needed for input visualization, though we primarily need internal hooks
-                 
-            # Wavelengths
-            try:
+                image_tensor.requires_grad = True
+
+            # Resolve wavelengths — use caller-supplied value (correct sensor) or fall back
+            if wavelengths is not None:
+                wvs = wavelengths.to(self.model.device)
+            else:
                 from config import sentinel2_bands
-                wvs = torch.tensor(sentinel2_bands.get_wavelength_tensor()).float().to(self.model.device) / 1000.0
-            except ImportError:
-                 wvs = None
+                wvs = (
+                    torch.tensor(sentinel2_bands.get_wavelength_tensor())
+                    .float()
+                    .to(self.model.device)
+                    / 1000.0  # nm → μm
+                )
             
             # Forward Visual TRUNK specifically (to bypass projection head issues and ensure DOFA-CLIP path)
             # Expects (B, C, H, W) -> (Embedding, Intermediates) or Embedding
@@ -296,32 +298,42 @@ def generate_explanation(
     image: np.ndarray,
     text: str,
     device: str = 'cpu',
-    image_size: int = 384
+    image_size: int = 384,
+    wavelengths: torch.Tensor = None
 ) -> np.ndarray:
     """
     High-level explanation function using Grad-CAM.
+
+    Args:
+        model_wrapper: DOFACLIPWrapper instance.
+        image: Image array in [0, 1] range, shape (C, H, W) or (H, W, C).
+        text: Text query.
+        device: Computation device.
+        image_size: Output heatmap resolution.
+        wavelengths: Band wavelengths in μm matching the sensor used for embedding.
+                     Pass image_encoder.wavelengths to guarantee consistency.
+                     Defaults to Sentinel-2 if None.
     """
-    # Prepare image tensor
     if isinstance(image, np.ndarray):
-        if image.ndim == 3 and image.shape[2] <= 13: # (H, W, C)
+        if image.ndim == 3 and image.shape[2] <= 13:  # (H, W, C) → (C, H, W)
             image = image.transpose(2, 0, 1)
         image = torch.from_numpy(image).float()
-    
+
     if image.dim() == 3:
         image = image.unsqueeze(0)
-        
+
     image = image.to(device or model_config.device)
-    image.requires_grad = True # Ensure input allows grad flow if needed (though we need param grad really)
-    
-    # Initialize GradECLIP
+    image.requires_grad = True
+
     explainer = GradECLIP(model_wrapper)
-    
-    # Generate Grad-CAM
+
     try:
-        heatmap = explainer.generate_gradcam(image, text, image_size=image_size)
+        heatmap = explainer.generate_gradcam(
+            image, text, image_size=image_size, wavelengths=wavelengths
+        )
     finally:
         explainer.remove_hooks()
-    
+
     return heatmap
 
 def verify_explanation_perturbation(

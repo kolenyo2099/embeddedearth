@@ -188,24 +188,24 @@ class Sentinel2Retriever:
         if reducer not in reducers:
             raise ValueError(f"Unknown reducer: {reducer}")
         
+        # Guard against empty collections: median() of nothing yields a band-less
+        # image and .select() then raises. Check size up-front so the caller
+        # gets an actionable error instead of an opaque EE exception downstream.
+        if collection.size().getInfo() == 0:
+            raise ValueError(
+                f"No Sentinel-2 scenes matched the AOI/date filter "
+                f"(start={start_date}, end={end_date}). "
+                f"Widen the date range or check cloud-mask settings."
+            )
+
         composite = reducers[reducer]()
-        
-        # Fallback: if composite has no bands (empty collection), try to select from raw if existing
-        # But we can't easily check for empty bands without getInfo()
-        # Instead, verify we set the default bands correctly.
-        
-        # Note: If collection is empty, median() returns an image with no bands.
-        # We should handle this upstream or set default bands.
-        
+
         # Select only the bands we need for DOFA-CLIP
-        # Use regexp to avoid error if band missing? No, strict selection is better.
-        # Add a check for collection size
-        
         composite = composite.select(self._bands)
-        
+
         # Clip to AOI
         composite = composite.clip(aoi)
-        
+
         return composite
     
     def normalize_for_model(self, image: ee.Image) -> ee.Image:

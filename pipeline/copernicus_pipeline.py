@@ -65,15 +65,14 @@ class CopernicusSearchPipeline:
         # Sentinel-2 from download_image_as_array is raw, so normalize.
         
         if sensor == "Sentinel-2":
-            # download_image_as_array returns raw reflectance
+            # run_search() does NOT call retriever.normalize_for_model() for S2, so
+            # download_image_as_array() returns raw reflectance (0–10000). Normalize here.
             image_array = normalize_reflectance(image_array)
             bands_config = sentinel2_bands
-        else: # Sentinel-1
-            # Sentinel-1 retriever returns 0-1 (dB scaled)
-            # But download_image_as_array might just download raw pixels if used directly on the image?
-            # Wait, download_image_as_array calls getDownloadUrl on the image passed.
-            # If the image passed is already normalized (which we do in pipeline), then it's 0-1.
-            # We must ensure we pass the normalized image to download_image_as_array.
+        else:  # Sentinel-1
+            # run_search() DOES call retriever.normalize_for_model() for S1 before download,
+            # so download_image_as_array() already returns values in [0, 1]. No further
+            # normalization needed here.
             bands_config = sentinel1_bands
             
         # Resize to model size (e.g. 224, or keep original if creating tiles)
@@ -99,12 +98,15 @@ class CopernicusSearchPipeline:
         meta_info = self._get_meta_info(lon, lat, date, resolution)
         
         # Wavelengths and Bandwidths
+        # CopernicusFM expects wavelengths in nanometers (nm) for all sensors.
         if sensor == "Sentinel-2":
-            wvs = bands_config.get_wavelength_tensor() # nm
-            bws = bands_config.get_bandwidth_list()    # nm
-        else: # Sentinel-1
-            # S1 config has microns (55500). Model expects nm.
-            # Convert um -> nm (x1000)
+            wvs = bands_config.get_wavelength_tensor()  # already in nm (490–2190)
+            bws = bands_config.get_bandwidth_list()      # already in nm
+        else:  # Sentinel-1
+            # S1 config stores C-band wavelength in micrometers (55500 μm = 5.55 cm).
+            # CopernicusFM expects nm, so convert: μm × 1000 = nm.
+            # Result: 55500 μm → 55_500_000 nm — this is physically correct for C-band.
+            # CopernicusFM's wavelength encoder was trained to handle this range for SAR.
             wvs = [w * 1000 for w in bands_config.get_wavelength_tensor()]
             bws = [b * 1000 for b in bands_config.get_bandwidth_list()]
             
@@ -212,6 +214,10 @@ class CopernicusSearchPipeline:
         # 2. Process Search Area
         # ----------------------
         search_ee_geom = ee.Geometry(search_geom)
+        search_comp = retriever.get_composite(search_ee_geom, start_date, end_date)
+        if sensor == "Sentinel-1":
+            search_comp = retriever.normalize_for_model(search_comp)
+
         search_rect = search_ee_geom.bounds().getInfo()['coordinates'][0]
         s_west = min(p[0] for p in search_rect)
         s_south = min(p[1] for p in search_rect)
@@ -250,7 +256,7 @@ class CopernicusSearchPipeline:
                     continue
                     
                 tile_arr = download_image_as_array(
-                    query_comp, # Reuse composite!
+                    search_comp,
                     t_geom,
                     bands=bands_config.band_names,
                     scale=resolution
@@ -289,13 +295,13 @@ class CopernicusSearchPipeline:
                 # Generate visualization image for UI
                 display_img = None
                 try:
-                    norm_arr = normalize_reflectance(tile_arr)
                     if sensor == "Sentinel-2":
+                        norm_arr = normalize_reflectance(tile_arr)
                         display_img = get_rgb_visualization(norm_arr, bands=bands_config.band_names)
                     else:
                         # Fallback for Sentinel-1 (2 bands) or others
                         # Simple grayscale using first band
-                        band0 = np.clip(norm_arr[0], 0, 1)
+                        band0 = np.clip(tile_arr[0], 0, 1)
                         gray = (band0 * 255).astype(np.uint8)
                         display_img = np.stack([gray, gray, gray], axis=-1)
                 except Exception as e:
