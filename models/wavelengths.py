@@ -97,6 +97,10 @@ def to_micrometers(wavelengths: torch.Tensor) -> torch.Tensor:
     - Any value already > 10_000 is assumed μm (SAR) and left untouched.
     - Any value between 100 and 10_000 is assumed nm and divided by 1000.
     - Any value < 100 is assumed μm and left untouched.
+
+    WARNING: the heuristic cannot represent wavelengths above 10 μm expressed
+    in nm (e.g. thermal IR ~10_900 nm would be misread as μm SAR). If thermal
+    bands are ever added, store their config values in μm directly.
     """
     wl_max = float(wavelengths.max().item())
     if wl_max > 10_000.0:

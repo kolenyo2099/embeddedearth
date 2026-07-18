@@ -6,11 +6,9 @@ Uses DINOv3 for query-based object detection in satellite imagery.
 import numpy as np
 import torch
 import streamlit as st
-from datetime import datetime
-from PIL import Image
 
 # Import existing utilities
-from pipeline.tiling import generate_geo_grid, Tile
+from pipeline.tiling import generate_geo_grid
 from data.preprocessing import download_image_as_array
 from models.dinov3 import DINOv3Wrapper
 
@@ -71,25 +69,22 @@ def run_zero_shot_pipeline(
     else:
         aoi_ee = ee.Geometry(aoi_geojson)
         
-    # CHECK DATA AVAILABILITY
-    # Before tiling, ensure we actually have images for this whole area/time.
+    # Build ONE composite for the whole AOI up front. get_composite() also
+    # guards against empty collections, so this doubles as the availability
+    # check — without paying a blocking GEE round trip per tile.
     try:
-        col_check = retriever.get_collection(aoi_ee, start_date, end_date)
-        count = col_check.size().getInfo()
-        if count == 0:
-            st.error(
-                f"❌ No {sensor} imagery found for this area between {start_date} and {end_date}. "
-                "Try increasing the date range or relaxing filters."
-            )
-            return []
-        print(f"[DEBUG] Found {count} {sensor} scenes for the AOI.")
+        composite = retriever.get_composite(aoi_ee, start_date, end_date)
+        composite = retriever.normalize_for_model(composite)
+    except ValueError as e:
+        st.error(
+            f"❌ No {sensor} imagery found for this area between {start_date} and {end_date}. "
+            f"Try increasing the date range or relaxing filters. ({e})"
+        )
+        return []
     except Exception as e:
-        print(f"[DEBUG] Collection check failed: {e}")
-        # Proceed cautiously? Or stop?
-        # If check failed (e.g. auth), subsequent steps will fail too.
         st.error(f"Failed to query Earth Engine: {e}")
         return []
-        
+
     # Get Bounds
     bounds_info = aoi_ee.bounds().getInfo()['coordinates'][0]
     west = min(p[0] for p in bounds_info)
@@ -115,125 +110,122 @@ def run_zero_shot_pipeline(
         st.warning(f"Processing {total_tiles} tiles. This may take time.")
     
     detections = []
-    
+
     progress_bar = st.progress(0)
     status_text = st.empty()
     status_text.text(f"Starting analysis of {total_tiles} tiles...")
-    
+
     # Prepare Query Vector
     query_vector = query_vector.to(model.device)
     query_norm = query_vector / query_vector.norm()
-    
-    for i, (t_bounds, col, row) in enumerate(grid):
-        progress_bar.progress((i + 1) / total_tiles)
-        status_text.text(f"Processing Tile {i+1}/{total_tiles}...")
-        
-        # Geometry
+
+    # Downloads are network-bound: run them in parallel against the single
+    # shared composite. Feature extraction stays on the main thread.
+    import concurrent.futures
+
+    def download_tile(args):
+        i, t_bounds = args
         t_minx, t_miny, t_maxx, t_maxy = t_bounds
         tile_geom = ee.Geometry.Rectangle([t_minx, t_miny, t_maxx, t_maxy])
-        
-        # Download
-        # Using retriever to get normalize composite
-        # IMPORTANT: We should verify if the composite actually has data.
-        # But for speed, we assume the tile is valid if it's within the AOI.
-        # However, GEE might return empty if no images intersect this specific small tile.
-        
         try:
-             # Create composite for just this tile
-             tile_comp = retriever.get_composite(tile_geom, start_date, end_date)
-             tile_comp = retriever.normalize_for_model(tile_comp)
-             
-             arr = download_image_as_array(tile_comp, tile_geom, bands=bands, scale=resolution)
+            arr = download_image_as_array(composite, tile_geom, bands=bands, scale=resolution)
         except Exception as e:
-             print(f"[DEBUG] Tile {i} download failed: {str(e)[:100]}...") # Log first 100 chars
-             continue
-        
-        if arr.max() == 0: 
-             print(f"[DEBUG] Tile {i} is empty (max=0). Skipping.")
-             continue
-        
-        # Preprocess
-        # download_image_as_array returns (C, H, W) = (3, H, W)
-        # Hugging Face ImageProcessor usually expects (H, W, C) for numpy arrays.
-        
-        try:
-            # Transpose: (C, H, W) -> (H, W, C)
-            arr = np.transpose(arr, (1, 2, 0))
+            print(f"[DEBUG] Tile {i} download failed: {str(e)[:100]}...")
+            return i, None
+        if arr.max() == 0:
+            return i, None
+        return i, arr
 
-            # DINO expects RGB-like input. Expand Sentinel-1 (VV/VH) to 3 channels.
-            if sensor == "Sentinel-1" and arr.shape[2] == 2:
-                arr = np.stack([arr[:, :, 0], arr[:, :, 1], arr[:, :, 0]], axis=-1)
-                
-            # Convert to uint8 0-255 for Processor if currently float 0-1
-            if arr.dtype == np.float32 or arr.dtype == np.float64:
-                arr = np.clip(arr, 0, 1)
-                arr_uint8 = (arr * 255).astype(np.uint8)
+    MAX_WORKERS = 12
+    download_args = [(i, t_bounds) for i, (t_bounds, col, row) in enumerate(grid)]
+    tile_bounds_by_idx = {i: t_bounds for i, (t_bounds, col, row) in enumerate(grid)}
+
+    completed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        for i, arr in executor.map(download_tile, download_args):
+            completed += 1
+            progress_bar.progress(completed / total_tiles)
+            status_text.text(f"Processing Tile {completed}/{total_tiles}...")
+
+            if arr is None:
+                continue
+
+            t_bounds = tile_bounds_by_idx[i]
+
+            # Preprocess
+            # download_image_as_array returns (C, H, W) = (3, H, W)
+            # Hugging Face ImageProcessor usually expects (H, W, C) for numpy arrays.
+            try:
+                # Transpose: (C, H, W) -> (H, W, C)
+                arr = np.transpose(arr, (1, 2, 0))
+
+                # DINO expects RGB-like input. Expand Sentinel-1 (VV/VH) to 3 channels.
+                if sensor == "Sentinel-1" and arr.shape[2] == 2:
+                    arr = np.stack([arr[:, :, 0], arr[:, :, 1], arr[:, :, 0]], axis=-1)
+
+                # Convert to uint8 0-255 for Processor if currently float 0-1
+                if arr.dtype == np.float32 or arr.dtype == np.float64:
+                    arr = np.clip(arr, 0, 1)
+                    arr_uint8 = (arr * 255).astype(np.uint8)
+                else:
+                    arr_uint8 = arr
+
+                # Extract Features
+                # shape: (1, N_patches, D)
+                # center_features matches the query vector centering
+                features = model.extract_features(arr_uint8, center_features=True)
+                features = features.squeeze(0) # (N_patches, D)
+            except Exception as e:
+                print(f"[DEBUG] Tile {i} Feature Extraction Error: {e}")
+                continue
+
+            # Calculate Similarity: (N, D) @ (D,) -> (N,)
+            feats_norm = features / features.norm(dim=1, keepdim=True)
+            sim_scores = (feats_norm @ query_norm).cpu().numpy() # (N,)
+
+            # Map back to spatial map, deriving the grid size dynamically
+            grid_dim = int(np.sqrt(len(sim_scores)))
+
+            if grid_dim * grid_dim != len(sim_scores):
+                # Fallback for non-square results if any (though usually square in the processor)
+                st.warning(f"Feature count {len(sim_scores)} is not a perfect square.")
+                sim_map = sim_scores.reshape(1, -1) # Flattened fallback
             else:
-                arr_uint8 = arr
-                
-            # Extract Features
-            # shape: (1, N_patches, D)
-            # CRITICAL FIX: Enable center_features to match query vector centering
-            features = model.extract_features(arr_uint8, center_features=True) 
-            features = features.squeeze(0) # (N_patches, D)
-        except Exception as e:
-            print(f"[DEBUG] Tile {i} Feature Extraction Error: {e}")
-            continue
-        
-        # Calculate Similarity
-        # (N, D) @ (D, 1) -> (N, 1)
-        # Normalize features
-        feats_norm = features / features.norm(dim=1, keepdim=True)
-        
-        sim_scores = (feats_norm @ query_norm).cpu().numpy() # (N,)
-        
-        # Map back to spatial map
-        # CRITICAL FIX: Dynamically determine grid dimension instead of assuming fixed size
-        grid_dim = int(np.sqrt(len(sim_scores)))
-        
-        if grid_dim * grid_dim != len(sim_scores):
-            # Fallback for non-square results if any (though usually square in the processor)
-            st.warning(f"Feature count {len(sim_scores)} is not a perfect square.")
-            sim_map = sim_scores.reshape(1, -1) # Flattened fallback
-        else:
-            sim_map = sim_scores.reshape(grid_dim, grid_dim)
-            
-        # Thresholding
-        # Finding connected components or just points
-        # For simple version: Store tiles having max score > threshold
-        
-        # Thresholding
-        max_score = sim_map.max()
-        if max_score > threshold:
-            # Store Result
-            # Convert map to heatmap image
-            # Replace cv2 with skimage to avoid dependency issues
-            import skimage.transform
-            
-            # skimage resize expects (H, W)
-            # It returns float 0-1
-            heatmap_resized = skimage.transform.resize(
-                sim_map, 
-                (arr_uint8.shape[0], arr_uint8.shape[1]), 
-                order=3, # Cubic
-                mode='reflect', 
-                anti_aliasing=True
-            )
-            
-            # Create masked overlay
-            detections.append({
-                'image': arr_uint8,
-                'heatmap': heatmap_resized,
-                'score': float(max_score),
-                'bounds': t_bounds,
-                'dino_attention': model.get_attention_map(arr_uint8), # Add native DINO attention
-                'pca_map': model.get_pca_map(arr_uint8, center_features=True) # Add PCA visualization
-            })
-            
+                sim_map = sim_scores.reshape(grid_dim, grid_dim)
+
+            # Thresholding: store tiles whose best patch beats the threshold
+            max_score = sim_map.max()
+            if max_score > threshold:
+                # Convert map to heatmap image (skimage instead of cv2)
+                import skimage.transform
+
+                # skimage resize expects (H, W); returns float 0-1
+                heatmap_resized = skimage.transform.resize(
+                    sim_map,
+                    (arr_uint8.shape[0], arr_uint8.shape[1]),
+                    order=3, # Cubic
+                    mode='reflect',
+                    anti_aliasing=True
+                )
+
+                detections.append({
+                    'image': arr_uint8,
+                    'heatmap': heatmap_resized,
+                    'score': float(max_score),
+                    'bounds': t_bounds,
+                })
+
     status_text.empty()
     progress_bar.empty()
-    
-    # Sort by score
-    detections.sort(key=lambda x: x['score'], reverse=True)
-    
+
+    # Suppress overlapping duplicates (grid has 50% overlap), sort by score
+    from pipeline.postprocessing import nms_results
+    detections = nms_results(detections)
+
+    # Extra visualizations (each costs a full model forward) only for the
+    # detections that survived NMS.
+    for det in detections:
+        det['dino_attention'] = model.get_attention_map(det['image'])   # Native DINO attention
+        det['pca_map'] = model.get_pca_map(det['image'], center_features=True)  # PCA visualization
+
     return detections

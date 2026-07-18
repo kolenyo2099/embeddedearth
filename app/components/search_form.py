@@ -26,7 +26,7 @@ class SearchParameters:
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     top_k: int = 10
-    similarity_threshold: float = 0.3
+    similarity_threshold: float = 0.1  # matches search_config.similarity_threshold
     resolution: float = 10.0
     chip_size: int = 384
     submitted: bool = False

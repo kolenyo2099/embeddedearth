@@ -97,7 +97,16 @@ class Sentinel1Retriever:
             Composite ee.Image with VV and VH bands.
         """
         collection = self.get_collection(aoi, start_date, end_date)
-        
+
+        # Guard against empty collections: median() of nothing yields a band-less
+        # image and .select() then raises an opaque EE error downstream.
+        if collection.size().getInfo() == 0:
+            raise ValueError(
+                f"No Sentinel-1 scenes matched the AOI/date filter "
+                f"(start={start_date}, end={end_date}). "
+                f"Widen the date range or try a different orbit pass."
+            )
+
         # Apply reducer
         if reducer == 'median':
             composite = collection.median()
@@ -105,7 +114,7 @@ class Sentinel1Retriever:
             composite = collection.mean()
         else:
             raise ValueError(f"Unknown reducer for SAR: {reducer}")
-        
+
         # Select required bands
         composite = composite.select(self._bands)
         
@@ -126,16 +135,3 @@ class Sentinel1Retriever:
         min_db = -25.0
         max_db = 0.0
         return image.subtract(min_db).divide(max_db - min_db).clamp(0, 1)
-
-    def get_visualization(self, image: ee.Image) -> ee.Image:
-        """
-        Create an RGB visualization for Sentinel-1.
-        R: VV
-        G: VH
-        B: VV/VH ratio
-        """
-        # Assuming image is already normalized 0-1 or needs normalization?
-        # Let's assume we take the raw/composite and return a 0-255 RGB for display
-        
-        # This helper might be useful for the frontend map
-        pass

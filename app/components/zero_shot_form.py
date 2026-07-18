@@ -3,15 +3,12 @@ import numpy as np
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 import io
-import torch
 
 from models.dinov3 import DINOv3Wrapper
-from pipeline.zero_shot_pipeline import run_zero_shot_pipeline
-from app.components.search_form import validate_search_params # reuse date/aoi validation logic if possible
 
 def render_zero_shot_form():
     """
-    Render the Zero-Shot Object Detection sidebar form.
+    Render the Zero-Shot Object Detection form.
     Returns params object if search submitted, else None.
     """
     st.header("🎯 Zero-Shot Detection")
@@ -83,13 +80,16 @@ def render_zero_shot_form():
         if canvas_result.json_data is not None:
             objects = canvas_result.json_data["objects"]
             if len(objects) > 0:
-                # Get last drawn object
+                # Get last drawn object. Fabric.js applies resize as scaleX/scaleY
+                # on top of the original width/height, so both must be honored.
                 obj = objects[-1]
+                obj_w = obj["width"] * obj.get("scaleX", 1.0)
+                obj_h = obj["height"] * obj.get("scaleY", 1.0)
                 left = int(obj["left"] * (img_array.shape[1] / canvas_width))
                 top = int(obj["top"] * (img_array.shape[0] / canvas_height))
-                width = int(obj["width"] * (img_array.shape[1] / canvas_width))
-                height = int(obj["height"] * (img_array.shape[0] / canvas_height))
-                
+                width = int(obj_w * (img_array.shape[1] / canvas_width))
+                height = int(obj_h * (img_array.shape[0] / canvas_height))
+
                 bbox = [left, top, width, height]
                 
                 # Extract Query Vector Button

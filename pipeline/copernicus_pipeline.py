@@ -1,10 +1,8 @@
 import ee
 import torch
 import numpy as np
-import io
 from datetime import datetime
-from typing import List, Dict, Union, Optional, Callable
-import logging
+from typing import List, Dict, Optional, Callable
 
 from data.sentinel2 import Sentinel2Retriever
 from data.sentinel1 import Sentinel1Retriever
@@ -232,29 +230,28 @@ class CopernicusSearchPipeline:
         tiles = list(generate_geo_grid((s_west, s_south, s_east, s_north), resolution, tile_size_px))
         
         results = []
-        
+
+        # Client-side intersection test (shapely) — an EE round trip per tile
+        # just to test a rectangle against the drawn polygon is pure latency.
+        from shapely.geometry import shape as shapely_shape, box as shapely_box
+        search_shape = shapely_shape(search_geom)
+
         if progress_callback:
             progress_callback(f"Processing {len(tiles)} tiles...")
-            
+
         for i, (t_bounds, col, row) in enumerate(tiles):
             if progress_callback and i % 5 == 0:
                 progress_callback(f"Processing tile {i+1}/{len(tiles)}...")
-                
+
             # t_bounds: (minx, miny, maxx, maxy)
+            # Skip tiles outside the (possibly irregular) drawn search area
+            if not shapely_box(*t_bounds).intersects(search_shape):
+                continue
+
             t_geom = ee.Geometry.Rectangle(list(t_bounds))
-            
-            # Fetch tile
+
+            # Fetch tile (one shared composite; only the region differs per tile)
             try:
-                # Reuse retriever (cached?? No, GEE is lazy)
-                # But creating composite for each tile is slow.
-                # Ideally create one composite for AOI and clip.
-                # But download_image_as_array takes image.
-                # So we can pass the same composite image, just different region.
-                
-                # Check intersection with search_geom to capture irregular shapes
-                if not t_geom.intersects(search_ee_geom).getInfo():
-                    continue
-                    
                 tile_arr = download_image_as_array(
                     search_comp,
                     t_geom,
@@ -307,19 +304,30 @@ class CopernicusSearchPipeline:
                 except Exception as e:
                     print(f"Vis generation failed: {e}")
 
+                # GeoJSON built client-side from the bounds — t_geom.getInfo()
+                # would be one more blocking EE round trip per result.
+                minx_t, miny_t, maxx_t, maxy_t = t_bounds
+                tile_geojson = {
+                    'type': 'Polygon',
+                    'coordinates': [[
+                        [minx_t, miny_t], [maxx_t, miny_t],
+                        [maxx_t, maxy_t], [minx_t, maxy_t],
+                        [minx_t, miny_t],
+                    ]],
+                }
+
                 results.append({
                     'image': display_img,
-                    'geometry': t_geom.getInfo(), #GeoJSON
+                    'geometry': tile_geojson,
                     'score': score,
                     'bounds': t_bounds
                 })
-                
+
             except Exception as e:
-                import traceback
                 print(f"Tile {i} error: {e}")
-                # traceback.print_exc()
                 continue
-                
-        # Sort results
-        results.sort(key=lambda x: x['score'], reverse=True)
+
+        # Suppress overlapping duplicates (grid has 50% overlap), sort by score
+        from pipeline.postprocessing import nms_results
+        results = nms_results(results)
         return results

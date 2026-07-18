@@ -24,10 +24,10 @@ sys.path.insert(0, str(project_root))
 from config import ui_config, gee_config
 
 # Import app components
-from app.accessibility import inject_accessibility_css, add_skip_link, announce_to_screen_reader
+from app.accessibility import inject_accessibility_css, announce_to_screen_reader
 from app.components.search_form import render_search_form, validate_search_params
 from app.components.map_viewer import render_map_viewer
-from app.components.result_grid import render_result_grid, render_loading_state
+from app.components.result_grid import render_result_grid
 
 
 def configure_page():
@@ -136,18 +136,13 @@ def render_sidebar():
 
 def render_main_content():
     """Render the main application content."""
-    # print("[DEBUG MAIN] render_main_content called") # Commented out to reduce noise
-    
-    # CSS Hacks to clean UI
+    # CSS hack: hide the random '0' if it's a progress bar artifact
     st.markdown("""
         <style>
-            /* Hide the annoying 'Skip to main content' button */
-            a[href="#skip-to-content"] { display: none !important; }
-            /* Hide the random '0' if it's a progress bar artifact */
             .stProgress > div > div > div > div { background-color: transparent; }
         </style>
     """, unsafe_allow_html=True)
-    
+
     st.markdown('<div id="main-content">', unsafe_allow_html=True)
     
     st.title("🌍 EmbeddedEarth")
@@ -194,11 +189,7 @@ def render_main_content():
     
     with col_left:
         # Map viewer - returns GeoJSON geometry dict
-        print("[DEBUG MAIN] Calling render_map_viewer...")
         aoi = render_map_viewer()
-        print(f"[DEBUG MAIN] render_map_viewer returned: {aoi}")
-        print(f"[DEBUG MAIN] aoi type: {type(aoi)}")
-        print(f"[DEBUG MAIN] aoi is None: {aoi is None}")
     
     with col_right:
 
@@ -359,6 +350,9 @@ def _render_search_diagnostics_panel():
         c7.metric("Scored Tiles", str(diag.get('scored_tiles', 0)))
         c8.metric("Above Threshold", str(diag.get('above_threshold', 0)))
 
+        if 'after_nms' in diag:
+            st.caption(f"After overlap suppression (NMS): {diag['after_nms']} distinct locations")
+
         st.markdown(
             f"**Similarity stats**  "
             f"min={diag.get('sim_min', 0.0):.4f}, "
@@ -403,12 +397,7 @@ def run_search(aoi_geojson: dict, params) -> list:
         List of result dicts with 'image', 'heatmap', 'score', 'bounds'.
     """
     import ee
-    from datetime import datetime, timedelta
-    
-    print(f"[DEBUG SEARCH] Starting search pipeline...")
-    print(f"[DEBUG SEARCH] AOI GeoJSON: {aoi_geojson}")
-    print(f"[DEBUG SEARCH] Query: {params.query}")
-    
+
     results = []
     st.session_state.search_diagnostics = None
     
@@ -422,16 +411,13 @@ def run_search(aoi_geojson: dict, params) -> list:
         
         # Step 2: Convert AOI GeoJSON to EE Geometry
         st.info("📍 Processing area of interest...")
-        print(f"[DEBUG SEARCH] Converting GeoJSON to EE Geometry...")
-        
+
         if aoi_geojson.get('type') == 'Polygon':
             aoi_ee = ee.Geometry.Polygon(aoi_geojson['coordinates'])
         else:
             # Generic conversion
             aoi_ee = ee.Geometry(aoi_geojson)
-        
-        print(f"[DEBUG SEARCH] EE Geometry created: {aoi_ee.getInfo()}")
-        
+
         # Step 3: Fetch imagery for selected sensor
         sensor = getattr(params, "sensor", "Sentinel-2")
         st.info(f"🛰️ Fetching {sensor} imagery from Google Earth Engine...")
@@ -452,18 +438,10 @@ def run_search(aoi_geojson: dict, params) -> list:
         # Date range from params
         start_date = params.start_date.strftime('%Y-%m-%d') if params.start_date else None
         end_date = params.end_date.strftime('%Y-%m-%d') if params.end_date else None
-        
-        print(f"[DEBUG SEARCH] Date range: {start_date} to {end_date}")
-        
-        # Save query for Verification tools
-        st.session_state.last_query = params.query if params.search_type == "text" else "Reference Image Search"
-        st.session_state.last_search_dates = (start_date, end_date)
-        
+
         composite = retriever.get_composite(aoi_ee, start_date, end_date)
         composite = retriever.normalize_for_model(composite)
-        
-        print(f"[DEBUG SEARCH] Composite created")
-        
+
         # Step 4: Tile-First Strategy
         st.info("🗺️ Generating search grid...")
         
@@ -502,18 +480,20 @@ def run_search(aoi_geojson: dict, params) -> list:
         est_rows = max(1, meters_height / stride_m)
         total_est_tiles = est_cols * est_rows
         
+        MAX_TILES = 25000
+
         if total_est_tiles > 5000:
             st.warning(f"⚠️ High-Resolution Search: Generating {int(total_est_tiles)} tiles. This might take a while!")
-        
-        if total_est_tiles > 25000:
+
+        if total_est_tiles > MAX_TILES:
              st.error(f"🛑 Too many tiles ({int(total_est_tiles)}). Please reduce the area or increase resolution to >{target_resolution}m.")
              return []
-        
+
         grid_tiles = list(generate_geo_grid(bounds, resolution=target_resolution, tile_size=chip_size))
         chip_coverage_m = int(chip_size * target_resolution)
         st.write(f"Created grid with {len(grid_tiles)} tiles (Resolution: {target_resolution}m/px, Chip: ~{chip_coverage_m}×{chip_coverage_m}m).")
-        
-        if len(grid_tiles) > 20000:
+
+        if len(grid_tiles) > MAX_TILES:
              st.error("Area is still too big! Please select a smaller region.")
              return []
         
@@ -541,20 +521,18 @@ def run_search(aoi_geojson: dict, params) -> list:
             query_embedding = ref_encoder.encode(ref_arr)
         else:
             query_embedding = text_encoder.encode(params.query)
-        
-        # DEBUG: Check query embedding stats
-        print(f"[DEBUG SEARCH] Query embedding stats: min={query_embedding.min():.4f}, max={query_embedding.max():.4f}, mean={query_embedding.mean():.4f}, norm={np.linalg.norm(query_embedding):.4f}")
-        
-        # Optimize: Define a processing function for parallel execution
-        # We process-and-forget: Download -> Encode -> Discard Image -> Keep Embedding
-        def process_tile_task(args):
+
+        from data.preprocessing import prepare_for_model
+
+        # Workers only download + preprocess (network/IO-bound); encoding happens
+        # on the main thread in real batches so the model's batch dimension is
+        # actually used instead of 12 threads contending over batch-of-1 calls.
+        def download_tile_task(args):
             idx, t_bounds, col, row = args
             try:
-                # Create EE geometry
                 t_minx, t_miny, t_maxx, t_maxy = t_bounds
-                # print(f"[DEBUG WORKER] Tile {idx} bounds: {t_bounds}") # Commented out to reduce noise, enable if needed
                 tile_geom = ee.Geometry.Rectangle([t_minx, t_miny, t_maxx, t_maxy])
-                
+
                 # Download (expensive network IO)
                 tile_data = download_image_as_array(
                     composite,
@@ -562,93 +540,97 @@ def run_search(aoi_geojson: dict, params) -> list:
                     bands=bands_to_download,
                     scale=target_resolution
                 )
-                
+
                 if tile_data.max() == 0:
                     return None
-                    
+
                 # Data is already in [0, 1]: composite was normalized server-side by
                 # retriever.normalize_for_model() (GEE .divide(scale_factor)).
                 # prepare_for_model() only resizes to the model's input resolution.
-                from data.preprocessing import prepare_for_model
                 tile_data = prepare_for_model(tile_data)
-                
-                # DEBUG: Check data stats
-                d_min, d_max, d_mean = tile_data.min(), tile_data.max(), tile_data.mean()
-                if idx < 5: # Only print first few to avoid spam
-                    print(f"[DEBUG DATA] Tile {idx} stats: shape={tile_data.shape}, min={d_min:.4f}, max={d_max:.4f}, mean={d_mean:.4f}")
-                
-                if d_max == 0:
+
+                if tile_data.max() == 0:
                      return None
-                     
-                # Encode (expensive CPU/GPU)
-                emb = image_encoder.encode_batch([tile_data])
-                if not np.all(np.isfinite(emb)):
-                    return None
-                
-                # Metadata only, NO DATA to save RAM
+
+                # Metadata only — pixel data is dropped after encoding to save RAM
                 tile_meta = Tile(
                     x=col * (chip_size // 2),
                     y=row * (chip_size // 2),
                     width=chip_size,
                     height=chip_size,
-                    data=None, # Process-and-Forget!
+                    data=None,
                     bounds=t_bounds
                 )
-                
-                return (tile_meta, emb)
-                
-            except Exception as e:
-                # print(f"[WARN] Tile {idx} failed: {e}") 
+
+                return (tile_meta, tile_data)
+
+            except Exception:
                 return None
 
         # Execute in parallel
         import concurrent.futures
-        
+        from config import model_config
+
         processed_tiles = []
-        tile_embeddings = []
-        
+        embedding_chunks = []
+
         # Max workers: 12 is generally safe for GEE REST API without hitting QPS limits too hard
         MAX_WORKERS = 12
-        
+        ENCODE_BATCH = model_config.batch_size
+
         progress_bar = st.progress(0)
         status_text = st.empty()
-        
+
         total_tiles = len(grid_tiles)
         completed = 0
-        
+
         # Prepare args
         task_args = [(i, t[0], t[1], t[2]) for i, t in enumerate(grid_tiles)]
-        
-        st.info(f"🚀 Speeding up... Processing {MAX_WORKERS} tiles in parallel.")
-        
+
+        st.info(f"🚀 Downloading with {MAX_WORKERS} parallel workers, encoding in batches of {ENCODE_BATCH}.")
+
+        def encode_buffer(buffer):
+            """Encode buffered (meta, data) pairs; keep only finite embeddings."""
+            metas, arrays = zip(*buffer)
+            embs = image_encoder.encode_batch(list(arrays))
+            finite = np.isfinite(embs).all(axis=1)
+            for meta, emb, ok in zip(metas, embs, finite):
+                if ok:
+                    processed_tiles.append(meta)
+                    embedding_chunks.append(emb)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # Submit all
-            future_to_tile = {executor.submit(process_tile_task, arg): arg for arg in task_args}
-            
+            future_to_tile = {executor.submit(download_tile_task, arg): arg for arg in task_args}
+
+            batch_buffer = []
             for future in concurrent.futures.as_completed(future_to_tile):
                 result = future.result()
                 completed += 1
-                
+
                 # Update UI every 5 tiles to reduce overhead
                 if completed % 5 == 0:
                     progress = min(1.0, completed / total_tiles)
                     progress_bar.progress(progress)
                     status_text.text(f"Processing tile {completed}/{total_tiles}...")
-                
+
                 if result:
-                    t_meta, t_emb = result
-                    processed_tiles.append(t_meta)
-                    tile_embeddings.append(t_emb)
+                    batch_buffer.append(result)
+                    if len(batch_buffer) >= ENCODE_BATCH:
+                        encode_buffer(batch_buffer)
+                        batch_buffer = []
+
+            if batch_buffer:
+                encode_buffer(batch_buffer)
 
         status_text.empty()
         progress_bar.empty()
-        
+
         if not processed_tiles:
             st.warning("No valid data found in the selected area.")
             return []
-            
-        # Concatenate embeddings
-        tile_embeddings = np.vstack(tile_embeddings)
+
+        # Stack embeddings
+        tile_embeddings = np.vstack(embedding_chunks)
         
         # Step 7: Compute similarities and rank
         st.info("🔍 Ranking results by similarity...")
@@ -685,11 +667,20 @@ def run_search(aoi_geojson: dict, params) -> list:
             'threshold': float(params.similarity_threshold),
         }
         
-        # Filter by threshold first, then take top-k of what remains.
+        # Filter by threshold, suppress overlapping duplicates (the grid has 50%
+        # overlap, so one hotspot shows up in several adjacent tiles), then top-k.
+        from pipeline.postprocessing import nms_results
+
         passing = np.where(similarities >= params.similarity_threshold)[0]
-        passing_sorted = passing[np.argsort(similarities[passing])[::-1]]
-        top_k = min(params.top_k, len(passing_sorted))
-        top_indices = passing_sorted[:top_k]
+        candidates = [
+            {'idx': int(i), 'score': float(similarities[i]), 'bounds': processed_tiles[i].bounds}
+            for i in passing
+        ]
+        deduplicated = nms_results(candidates)
+        top_k = min(params.top_k, len(deduplicated))
+        top_indices = [c['idx'] for c in deduplicated[:top_k]]
+
+        st.session_state.search_diagnostics['after_nms'] = len(deduplicated)
 
         # Step 8: Re-fetch and Generate Explanations
         st.info(f"🔥 Fetching full details for top {top_k} matches...")
@@ -705,8 +696,6 @@ def run_search(aoi_geojson: dict, params) -> list:
             # We need to recover the original tile index from the processed list
             tile = processed_tiles[idx]
             score = float(similarities[idx])
-            
-            print(f"[DEBUG SEARCH] Processing result {rank+1}: tile {idx}, score {score:.3f}")
 
             # Re-download the specific tile data!
             # We need the geometry again
@@ -723,7 +712,6 @@ def run_search(aoi_geojson: dict, params) -> list:
             
             # Data is already [0, 1] — composite was normalized via normalize_for_model().
             # prepare_for_model() only resizes.
-            from data.preprocessing import prepare_for_model
             tile_data = prepare_for_model(tile_data)
             
             # Update tile with data

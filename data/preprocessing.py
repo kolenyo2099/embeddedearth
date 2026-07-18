@@ -8,10 +8,7 @@ for DOFA-CLIP model input.
 import ee
 import numpy as np
 import requests
-import io
-from typing import Tuple, Optional, Union
 from PIL import Image
-import rasterio
 from rasterio.io import MemoryFile
 import logging
 
@@ -162,12 +159,19 @@ def get_rgb_visualization(
         rgb = np.stack([ch0, ch1, ch0], axis=-1)
         return (rgb * 255).astype(np.uint8)
 
-    # Find RGB band indices (B4=Red, B3=Green, B2=Blue)
-    try:
-        r_idx = bands.index('B4')
-        g_idx = bands.index('B3')
-        b_idx = bands.index('B2')
-    except ValueError:
+    # Find RGB band indices (B4=Red, B3=Green, B2=Blue), accepting both
+    # GEE-style (B4) and zero-padded (B04) band names
+    def _find_band(candidates):
+        for name in candidates:
+            if name in bands:
+                return bands.index(name)
+        return None
+
+    r_idx = _find_band(['B4', 'B04'])
+    g_idx = _find_band(['B3', 'B03'])
+    b_idx = _find_band(['B2', 'B02'])
+
+    if r_idx is None or g_idx is None or b_idx is None:
         # Fallback to first three bands
         r_idx, g_idx, b_idx = 0, 1, 2
     
@@ -181,75 +185,6 @@ def get_rgb_visualization(
     # Apply brightness and clip
     rgb = rgb * brightness_factor
     rgb = np.clip(rgb, 0, 1)
-    
+
     # Convert to uint8
     return (rgb * 255).astype(np.uint8)
-
-
-def get_wavelength_tensor() -> np.ndarray:
-    """
-    Get wavelength values as numpy array for DOFA-CLIP.
-    
-    Returns:
-        Array of wavelengths in nanometers.
-    """
-    return np.array(sentinel2_bands.get_wavelength_tensor(), dtype=np.float32)
-
-
-class ImageProcessor:
-    """
-    Complete image processing pipeline for converting
-    GEE imagery to model-ready tensors.
-    """
-    
-    def __init__(self):
-        """Initialize processor with configuration."""
-        self._bands = sentinel2_bands.band_names
-        self._scale_factor = sentinel2_bands.scale_factor
-        self._target_size = model_config.image_size
-    
-    def process(
-        self,
-        image: ee.Image,
-        aoi: ee.Geometry,
-        scale: int = 10
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Full processing pipeline.
-        
-        Args:
-            image: GEE image to process.
-            aoi: Area of interest geometry.
-            scale: Resolution in meters.
-            
-        Returns:
-            Tuple of (processed_array, wavelengths).
-        """
-        # Download
-        raw = download_image_as_array(image, aoi, self._bands, scale)
-        
-        # Normalize
-        normalized = normalize_reflectance(raw, self._scale_factor)
-        
-        # Resize
-        resized = prepare_for_model(normalized, self._target_size)
-        
-        # Get wavelengths
-        wavelengths = get_wavelength_tensor()
-        
-        return resized, wavelengths
-    
-    def get_visualization(
-        self,
-        data: np.ndarray
-    ) -> np.ndarray:
-        """
-        Get RGB visualization of processed data.
-        
-        Args:
-            data: Processed array of shape (C, H, W).
-            
-        Returns:
-            RGB array for display.
-        """
-        return get_rgb_visualization(data, self._bands)

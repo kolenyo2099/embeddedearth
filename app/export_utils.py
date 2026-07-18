@@ -20,6 +20,16 @@ import tempfile
 import os
 from pathlib import Path
 
+def _pdf_safe(text: str) -> str:
+    """
+    Make text safe for FPDF core fonts (latin-1 only).
+
+    Characters outside latin-1 (e.g. CJK, emoji) are replaced with '?' instead
+    of crashing report generation.
+    """
+    return str(text).encode('latin-1', errors='replace').decode('latin-1')
+
+
 def generate_pdf_report(results, query, aoi_geojson=None):
     """
     Generate an operational briefing PDF report.
@@ -41,7 +51,7 @@ def generate_pdf_report(results, query, aoi_geojson=None):
     pdf.cell(0, 10, "Mission Summary", new_x="LMARGIN", new_y="NEXT")
     
     pdf.set_font("Helvetica", "", 12)
-    pdf.cell(0, 10, f"Search Query: {query}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 10, _pdf_safe(f"Search Query: {query}"), new_x="LMARGIN", new_y="NEXT")
     pdf.cell(0, 10, f"Total Hits Found: {len(results)}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(10)
     

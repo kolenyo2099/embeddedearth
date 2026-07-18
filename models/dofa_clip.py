@@ -6,20 +6,15 @@ handling wavelength-aware encoding for remote sensing imagery.
 """
 
 import torch
-import torch.nn as nn
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Union, List
 from pathlib import Path
 import numpy as np
-from transformers import CLIPTokenizer, CLIPTextModel
 
 import sys
 sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
-from config import model_config, sentinel2_bands, sentinel1_bands
-from models.wavelengths import get_wavelength_tensor
+from config import model_config, sentinel2_bands
 
 import open_clip
-import math
-import torch.nn.functional as F
 
 
 class DOFACLIPWrapper:
@@ -178,14 +173,15 @@ class DOFACLIPWrapper:
             images: Array/tensor in [0, 1] range, shape (C, H, W) or (B, C, H, W).
             wavelengths: Band wavelengths in micrometers (μm). If None, defaults to
                          Sentinel-2 bands. To convert from nm: divide by 1000.
-            normalize: L2-normalize output embeddings.
+            normalize: L2-normalize output embeddings. Input (SigLIP) normalization
+                       is always applied regardless of this flag.
 
         Returns:
             Tensor of shape (B, embedding_dim).
         """
         if not self._loaded: self._load_model()
 
-        images = self.preprocess_tensor(images, normalize=normalize)
+        images = self.preprocess_tensor(images, normalize=True)
 
         # Default: Sentinel-2 wavelengths (converted to μm via helper).
         if wavelengths is None:
@@ -217,13 +213,15 @@ class DOFACLIPWrapper:
         Args:
             images: Array/tensor in [0, 1] range.
             wavelengths: Band wavelengths in μm. Defaults to Sentinel-2.
+            normalize: L2-normalize output tokens. Input (SigLIP) normalization
+                       is always applied regardless of this flag.
 
         Returns:
             Tensor of shape (B, N_patches, EmbedDim).
         """
         if not self._loaded: self._load_model()
 
-        images = self.preprocess_tensor(images, normalize=normalize)
+        images = self.preprocess_tensor(images, normalize=True)
 
         if wavelengths is None:
             from models.wavelengths import to_micrometers

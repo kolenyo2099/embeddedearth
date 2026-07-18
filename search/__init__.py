@@ -1,1 +1,0 @@
-"""EmbeddedEarth - Vector Search Module"""

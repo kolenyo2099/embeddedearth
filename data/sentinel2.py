@@ -283,25 +283,3 @@ class Sentinel2Retriever:
         
         task.start()
         return task
-
-
-# Convenience function for quick access
-def get_cloud_free_composite(
-    aoi: ee.Geometry,
-    start_date: str = None,
-    end_date: str = None
-) -> ee.Image:
-    """
-    Quick function to get a cloud-free Sentinel-2 composite.
-    
-    Args:
-        aoi: Area of interest.
-        start_date: Optional start date.
-        end_date: Optional end date.
-        
-    Returns:
-        Normalized, cloud-free composite image.
-    """
-    retriever = Sentinel2Retriever()
-    composite = retriever.get_composite(aoi, start_date, end_date)
-    return retriever.normalize_for_model(composite)

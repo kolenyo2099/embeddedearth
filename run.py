@@ -11,7 +11,6 @@ Or directly:
     streamlit run app/main.py
 """
 
-import subprocess
 import sys
 import os
 from pathlib import Path
@@ -19,28 +18,26 @@ from pathlib import Path
 
 def main():
     """Launch the Streamlit application."""
-    # Get project root
-    project_root = Path(__file__).parent.absolute()
-    app_path = project_root / "app" / "main.py"
-    """Run the EmbeddedEarth application."""
     print("🚀 Launching EmbeddedEarth...")
-    
+
     # Check dependencies
     try:
         import streamlit
-        import geemap
         import open_clip
     except ImportError as e:
         print(f"❌ Missing dependency: {e.name}")
         print("Please run: ./install.sh")
         sys.exit(1)
-        
+
     # Run Streamlit
     import streamlit.web.cli as stcli
-    app_path = os.path.join(os.path.dirname(__file__), "app/main.py")
-    
-    sys.argv = ["streamlit", "run", app_path, "--server.port=8501", "--server.address=0.0.0.0"]
-    
+    app_path = str(Path(__file__).parent.absolute() / "app" / "main.py")
+
+    # Bind to localhost by default; set EMBEDDEDEARTH_HOST=0.0.0.0 to expose
+    # the app on the local network intentionally.
+    host = os.getenv("EMBEDDEDEARTH_HOST", "localhost")
+    sys.argv = ["streamlit", "run", app_path, "--server.port=8501", f"--server.address={host}"]
+
     print(f"🛰️  Starting EmbeddedEarth...")
     print(f"👉 Open http://localhost:8501 in your browser")
     

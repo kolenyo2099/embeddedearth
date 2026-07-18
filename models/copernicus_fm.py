@@ -22,8 +22,8 @@ class CopernicusFM(nn.Module):
 
     def _load_model(self):
         print("Loading CopernicusFM model...")
-        # Initialize the model architecture
-        # global_pool=False to use CLS token (likely match for foundation model weights)
+        # Initialize the model architecture with global average pooling
+        # (matches the released foundation-model weights)
         model = vit_base_patch16(
             num_classes=0,
             drop_rate=0.0,

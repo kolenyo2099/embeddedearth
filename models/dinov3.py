@@ -159,7 +159,8 @@ class DINOv3Wrapper:
         # Get dimensions for reshaping logic
         pixel_values = inputs["pixel_values"]
         _, _, h_model, w_model = pixel_values.shape
-        patch_size = 14
+        # Fallback only — the loaded dinov3-vitl16 config provides patch_size=16
+        patch_size = 16
         if hasattr(self._model.config, 'patch_size'):
              patch_size = self._model.config.patch_size
         
@@ -201,7 +202,8 @@ class DINOv3Wrapper:
         # Get actual input dimensions after resizing
         # The processor usually resizes to a multiple of patch_size (e.g. 14 or 16)
         _, _, h_model, w_model = pixel_values.shape
-        patch_size = 14 # Default for ViT-L/14, DINOv3 is typically 14
+        # Fallback only — the loaded dinov3-vitl16 config provides patch_size=16
+        patch_size = 16
         if hasattr(self._model.config, 'patch_size'):
              patch_size = self._model.config.patch_size
         
@@ -283,7 +285,8 @@ class DINOv3Wrapper:
         # Get dimensions
         pixel_values = inputs["pixel_values"]
         _, _, h_model, w_model = pixel_values.shape
-        patch_size = 14
+        # Fallback only — the loaded dinov3-vitl16 config provides patch_size=16
+        patch_size = 16
         if hasattr(self._model.config, 'patch_size'):
              patch_size = self._model.config.patch_size
              

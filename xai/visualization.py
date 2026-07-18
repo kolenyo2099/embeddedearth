@@ -7,9 +7,7 @@ for the Streamlit frontend.
 
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 from PIL import Image
-from typing import Tuple, Optional
 import io
 
 
@@ -81,49 +79,6 @@ def create_colorbar(
     return colorbar
 
 
-def create_result_grid(
-    images: list,
-    scores: list = None,
-    ncols: int = 3,
-    cell_size: int = 200
-) -> np.ndarray:
-    """
-    Create a grid of result images.
-    
-    Args:
-        images: List of RGB images.
-        scores: Optional list of similarity scores.
-        ncols: Number of columns.
-        cell_size: Size of each cell.
-        
-    Returns:
-        Grid image.
-    """
-    n = len(images)
-    nrows = (n + ncols - 1) // ncols
-    
-    # Create grid
-    grid_h = nrows * cell_size
-    grid_w = ncols * cell_size
-    grid = np.ones((grid_h, grid_w, 3), dtype=np.uint8) * 240  # Light gray bg
-    
-    for i, img in enumerate(images):
-        row = i // ncols
-        col = i % ncols
-        
-        y = row * cell_size
-        x = col * cell_size
-        
-        # Resize image to fit cell
-        img_pil = Image.fromarray(img)
-        img_resized = img_pil.resize((cell_size, cell_size), Image.BILINEAR)
-        img_array = np.array(img_resized)
-        
-        grid[y:y+cell_size, x:x+cell_size] = img_array
-    
-    return grid
-
-
 def generate_caption(
     score: float,
     bounds: tuple = None,
@@ -151,8 +106,10 @@ def generate_caption(
         minx, miny, maxx, maxy = bounds
         center_lon = (minx + maxx) / 2
         center_lat = (miny + maxy) / 2
-        parts.append(f"Location: {center_lat:.4f}°N, {center_lon:.4f}°E")
-    
+        ns = "N" if center_lat >= 0 else "S"
+        ew = "E" if center_lon >= 0 else "W"
+        parts.append(f"Location: {abs(center_lat):.4f}°{ns}, {abs(center_lon):.4f}°{ew}")
+
     return ". ".join(parts)
 
 

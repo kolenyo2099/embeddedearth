@@ -27,8 +27,8 @@ class Tile:
     width: int
     height: int
     
-    # Image data (C, H, W)
-    data: np.ndarray
+    # Image data (C, H, W); None when the pipeline only tracks metadata
+    data: Optional[np.ndarray]
     
     # Geospatial bounds (minx, miny, maxx, maxy)
     bounds: Optional[Tuple[float, float, float, float]] = None
@@ -196,71 +196,6 @@ def tile_image(
     generator = TileGenerator(tile_size, overlap)
     return list(generator.generate(image, transform=transform, bounds=bounds))
 
-
-def reconstruct_from_tiles(
-    tiles: List[Tile],
-    output_shape: Tuple[int, int, int],
-    reduce: str = 'mean'
-) -> np.ndarray:
-    """
-    Reconstruct an image from overlapping tiles.
-    
-    Useful for creating heatmaps from per-tile scores.
-    
-    Args:
-        tiles: List of Tile objects.
-        output_shape: Target shape (C, H, W).
-        reduce: How to handle overlaps ('mean', 'max', 'first').
-        
-    Returns:
-        Reconstructed array.
-    """
-    C, H, W = output_shape
-    
-    if reduce == 'mean':
-        output = np.zeros((C, H, W), dtype=np.float32)
-        counts = np.zeros((H, W), dtype=np.float32)
-        
-        for tile in tiles:
-            y, x = tile.y, tile.x
-            h, w = tile.height, tile.width
-            
-            output[:, y:y+h, x:x+w] += tile.data
-            counts[y:y+h, x:x+w] += 1
-        
-        # Avoid division by zero
-        counts = np.maximum(counts, 1)
-        output = output / counts
-        
-    elif reduce == 'max':
-        output = np.full((C, H, W), -np.inf, dtype=np.float32)
-        
-        for tile in tiles:
-            y, x = tile.y, tile.x
-            h, w = tile.height, tile.width
-            output[:, y:y+h, x:x+w] = np.maximum(
-                output[:, y:y+h, x:x+w],
-                tile.data
-            )
-    
-    else:  # 'first'
-        output = np.zeros((C, H, W), dtype=np.float32)
-        filled = np.zeros((H, W), dtype=bool)
-        
-        for tile in tiles:
-            y, x = tile.y, tile.x
-            h, w = tile.height, tile.width
-            
-            mask = ~filled[y:y+h, x:x+w]
-            for c in range(C):
-                output[c, y:y+h, x:x+w] = np.where(
-                    mask,
-                    tile.data[c],
-                    output[c, y:y+h, x:x+w]
-                )
-            filled[y:y+h, x:x+w] = True
-    
-    return output
 
 def generate_geo_grid(
     bounds: Tuple[float, float, float, float],

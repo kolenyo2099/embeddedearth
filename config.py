@@ -31,12 +31,10 @@ MODELS_DIR.mkdir(exist_ok=True)
 @dataclass
 class GEEConfig:
     """Configuration for Google Earth Engine."""
-    
+
     # GEE Project ID (set via environment variable or directly)
     # If not set, GEE might try to use default credentials which is fine for local dev
-    # GEE Project ID (set via environment variable or directly)
-    # If not set, GEE might try to use default credentials which is fine for local dev
-    project_id: str = os.getenv("GEE_PROJECT_ID")
+    project_id: Optional[str] = os.getenv("GEE_PROJECT_ID")
     
     # Sentinel-2 Collection
     s2_collection: str = "COPERNICUS/S2_SR_HARMONIZED"
@@ -212,12 +210,6 @@ class SearchConfig:
     # Similarity threshold (0-1)
     # Default lowered to 0.1 to account for potentially low cosine scores in raw models
     similarity_threshold: float = 0.1
-    
-    # Use approximate search for large indexes
-    use_approximate: bool = False
-    
-    # FAISS index type
-    index_type: str = "IndexFlatIP"  # Inner product for normalized vectors
 
 
 # =============================================================================
