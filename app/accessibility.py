@@ -19,38 +19,37 @@ def inject_accessibility_css():
     """
     st.markdown("""
     <style>
-    /* Focus indicators */
+    /* Focus indicators (amber, matches the theme accent) */
     *:focus {
-        outline: 3px solid #4A90A4 !important;
+        outline: 2px solid #f59e0b !important;
         outline-offset: 2px !important;
     }
-    
+
     /* Skip to content link - Removed */
-    
+
     /* Improved button contrast */
     .stButton > button {
         min-height: 44px;  /* Touch target size */
         font-size: 16px;
     }
-    
-    /* Form field labels */
+
+    /* Form field labels (inherit the dark-theme text color) */
     .stTextInput label,
     .stSelectbox label,
     .stSlider label {
         font-weight: 600;
-        color: #333;
     }
-    
+
     /* Result cards */
     .result-card {
-        border: 2px solid #ddd;
-        border-radius: 8px;
+        border: 1px solid #2a2f3a;
+        border-radius: 10px;
         padding: 12px;
-        background: #fff;
+        background: #181b22;
     }
-    
+
     .result-card:focus-within {
-        border-color: #003262;
+        border-color: #f59e0b;
     }
     
     /* High contrast mode support */

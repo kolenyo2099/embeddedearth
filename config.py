@@ -18,10 +18,12 @@ from typing import List, Dict, Optional
 PROJECT_ROOT = Path(__file__).parent.absolute()
 DATA_DIR = PROJECT_ROOT / "cache"
 MODELS_DIR = PROJECT_ROOT / "models_cache"
+AREAS_DIR = Path(os.getenv("EMBEDDEDEARTH_AREAS_DIR", str(Path.home() / ".embeddedearth" / "areas")))
 
 # Ensure directories exist
 DATA_DIR.mkdir(exist_ok=True)
 MODELS_DIR.mkdir(exist_ok=True)
+AREAS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # =============================================================================
@@ -235,6 +237,18 @@ class UIConfig:
 
 
 # =============================================================================
+# AREA STORAGE CONFIGURATION
+# =============================================================================
+
+@dataclass
+class AreaStoreConfig:
+    """Configuration for the Phase A/B loaded-area cache."""
+
+    areas_dir: Path = AREAS_DIR
+    tile_cache_dtype: str = "float16"
+
+
+# =============================================================================
 # SINGLETON INSTANCES
 # =============================================================================
 
@@ -246,3 +260,4 @@ model_config = ModelConfig()
 tiling_config = TilingConfig()
 search_config = SearchConfig()
 ui_config = UIConfig()
+area_store_config = AreaStoreConfig()

@@ -11,6 +11,7 @@ from config import gee_config
 class CopernicusParameters:
     query_geom: Optional[Dict] = None
     search_geom: Optional[Dict] = None
+    search_area: Optional[object] = None  # LoadedArea, when reusing a loaded area
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     sensor: str = "Sentinel-2"
@@ -18,28 +19,35 @@ class CopernicusParameters:
     threshold: float = 0.5
     submitted: bool = False
 
-def render_copernicus_form(current_map_aoi: Optional[Dict]) -> CopernicusParameters:
+def render_copernicus_form(current_map_aoi: Optional[Dict], area=None) -> CopernicusParameters:
     """
     Render form for CopernicusFM.
-    Allows capturing Map AOI as Query or Search area.
+
+    Allows capturing Map AOI as Query area. The Search area normally also
+    needs capturing, but when `area` (sidebar → Load & Embed Area) is set,
+    the search side reuses its cached tiles/embeddings instead — no capture,
+    no sensor/date/resolution inputs, no GEE round trip for the search side.
     """
-    
+
     st.markdown("### 🛰️ Copernicus Foundation Model")
     st.markdown("Feature extraction and similarity search using CopernicusFM.")
-    
+
     # Initialize session state for this form if needed
     if 'copernicus_query_geom' not in st.session_state:
         st.session_state.copernicus_query_geom = None
     if 'copernicus_search_geom' not in st.session_state:
         st.session_state.copernicus_search_geom = None
-        
+
     params = CopernicusParameters()
-    
-    # Area Selection UI
-    st.info("Step 1: Draw on the map, then capture as Query or Search area.")
-    
+    params.search_area = area
+
+    if area is not None:
+        st.info("Step 1: Draw a small reference patch on the map, then capture it as the Query area.")
+    else:
+        st.info("Step 1: Draw on the map, then capture as Query or Search area.")
+
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.markdown("**Query Area** (Pattern to find)")
         if st.button("📍 Capture Map as Query Area"):
@@ -48,62 +56,70 @@ def render_copernicus_form(current_map_aoi: Optional[Dict]) -> CopernicusParamet
                 st.success("Captured!")
             else:
                 st.error("Draw on map first!")
-        
+
         if st.session_state.copernicus_query_geom:
             st.success("✅ Query Area Set")
-            # Maybe show bounds or area?
         else:
             st.warning("⚠️ Not Set")
 
     with col2:
         st.markdown("**Search Area** (Where to look)")
-        if st.button("🗺️ Capture Map as Search Area"):
-            if current_map_aoi:
-                st.session_state.copernicus_search_geom = current_map_aoi
-                st.success("Captured!")
-            else:
-                st.error("Draw on map first!")
-                
-        if st.session_state.copernicus_search_geom:
-            st.success("✅ Search Area Set")
+        if area is not None:
+            st.success(f"✅ Reusing '{area.name}' — {area.num_tiles} tiles")
         else:
-            st.warning("⚠️ Not Set")
-            
+            if st.button("🗺️ Capture Map as Search Area"):
+                if current_map_aoi:
+                    st.session_state.copernicus_search_geom = current_map_aoi
+                    st.success("Captured!")
+                else:
+                    st.error("Draw on map first!")
+
+            if st.session_state.copernicus_search_geom:
+                st.success("✅ Search Area Set")
+            else:
+                st.warning("⚠️ Not Set")
+
     st.divider()
-    
+
     # Form for other parameters
     with st.form("copernicus_fm_form"):
-        # Sensor Selector
-        sensor = st.selectbox(
-            "Sensor",
-            options=["Sentinel-2", "Sentinel-1"],
-            help="Choose between Optical (Sentinel-2) or Radar (Sentinel-1)."
-        )
+        if area is not None:
+            sensor = area.params.sensor
+            start_date = area.params.start_date
+            end_date = area.params.end_date
+            resolution = area.params.resolution
+            st.caption(
+                f"Sensor/dates/resolution come from the loaded area: "
+                f"{sensor} · {start_date} to {end_date} · {resolution:g} m/px"
+            )
+        else:
+            sensor = st.selectbox(
+                "Sensor",
+                options=["Sentinel-2", "Sentinel-1"],
+                help="Choose between Optical (Sentinel-2) or Radar (Sentinel-1)."
+            )
+
+            c1, c2 = st.columns(2)
+            with c1:
+                default_start = datetime.now() - timedelta(days=gee_config.default_days_back)
+                start_date = st.date_input("Start Date", value=default_start)
+            with c2:
+                end_date = st.date_input("End Date", value=datetime.now())
+
+            resolution = st.slider(
+                "Resolution (m/px)",
+                min_value=10.0,
+                max_value=60.0,
+                value=10.0,
+                step=10.0,
+                help="Resolution for analysis. 10m is standard for S2/S1."
+            )
+
         params.sensor = sensor
-        
-        # Date inputs
-        c1, c2 = st.columns(2)
-        with c1:
-            default_start = datetime.now() - timedelta(days=gee_config.default_days_back)
-            start_date = st.date_input("Start Date", value=default_start)
-        with c2:
-            end_date = st.date_input("End Date", value=datetime.now())
-            
         params.start_date = start_date
         params.end_date = end_date
-        
-
-        # Resolution
-        resolution = st.slider(
-            "Resolution (m/px)",
-            min_value=10.0,
-            max_value=60.0,
-            value=10.0,
-            step=10.0,
-            help="Resolution for analysis. 10m is standard for S2/S1."
-        )
         params.resolution = resolution
-        
+
         # Similarity Threshold (Replicating SearchForm logic)
         threshold_pct = st.slider(
             "Minimum Match Confidence (%)",
@@ -115,12 +131,12 @@ def render_copernicus_form(current_map_aoi: Optional[Dict]) -> CopernicusParamet
             help="Minimum similarity percentage. Tiles below this score will be filtered out."
         )
         params.threshold = threshold_pct / 100.0
-        
+
         submitted = st.form_submit_button("🚀 Run Copernicus Search", type="primary")
         params.submitted = submitted
-        
+
     # Populate params with stored geoms
     params.query_geom = st.session_state.copernicus_query_geom
-    params.search_geom = st.session_state.copernicus_search_geom
-    
+    params.search_geom = st.session_state.copernicus_search_geom if area is None else None
+
     return params

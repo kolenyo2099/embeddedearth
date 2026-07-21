@@ -10,6 +10,9 @@ from data.preprocessing import download_image_as_array, normalize_reflectance, g
 from models.copernicus_fm import CopernicusFM
 from config import sentinel2_bands, sentinel1_bands, model_config
 from pipeline.tiling import generate_geo_grid
+from pipeline.area_store import LoadedArea
+
+COPERNICUS_MODEL_KEY = "copernicus_fm"
 
 class CopernicusSearchPipeline:
     def __init__(self, device: str = "cpu"):
@@ -49,23 +52,30 @@ class CopernicusSearchPipeline:
         meta = torch.tensor([lon, lat, day_of_year, area_km2], dtype=torch.float32)
         return meta.unsqueeze(0) # [1, 4]
 
-    def _prepare_input(self, 
-                       image_array: np.ndarray, 
-                       bbox: tuple, 
+    def _prepare_input(self,
+                       image_array: np.ndarray,
+                       bbox: tuple,
                        date: datetime,
                        sensor: str,
-                       resolution: float) -> dict:
+                       resolution: float,
+                       already_normalized: bool = False) -> dict:
         """
         Convert numpy array to model inputs.
+
+        already_normalized=True skips the reflectance division — used when
+        image_array comes from a LoadedArea's cached tiles, which were
+        already normalized to [0, 1] at load time (Sentinel2Retriever /
+        Sentinel1Retriever .normalize_for_model()).
         """
         # Image shape: (C, H, W)
         # Normalize to 0-1 if not already (Sentinel-1 is already 0-1 from retriever)
         # Sentinel-2 from download_image_as_array is raw, so normalize.
-        
+
         if sensor == "Sentinel-2":
-            # run_search() does NOT call retriever.normalize_for_model() for S2, so
-            # download_image_as_array() returns raw reflectance (0–10000). Normalize here.
-            image_array = normalize_reflectance(image_array)
+            if not already_normalized:
+                # run_search() does NOT call retriever.normalize_for_model() for S2, so
+                # download_image_as_array() returns raw reflectance (0–10000). Normalize here.
+                image_array = normalize_reflectance(image_array)
             bands_config = sentinel2_bands
         else:  # Sentinel-1
             # run_search() DOES call retriever.normalize_for_model() for S1 before download,
@@ -115,25 +125,95 @@ class CopernicusSearchPipeline:
             "bandwidths": bws
         }
 
-    def run_search(self, 
-                   query_geom: Dict, 
-                   search_geom: Dict, 
-                   start_date: str, 
-                   end_date: str, 
+    def embed_search_area(
+        self,
+        area: LoadedArea,
+        date_obj: datetime,
+        resolution: float,
+        progress_callback: Optional[Callable[[str], None]] = None,
+        model_key: str = COPERNICUS_MODEL_KEY,
+    ) -> np.ndarray:
+        """
+        Embed every cached tile in `area` with CopernicusFM. No-op (returns
+        the cached array) if area.embeddings[model_key] already exists.
+
+        The query is a geometry, so only this search-area side is cacheable
+        — a new query patch just re-scores these same embeddings.
+        """
+        if model_key in area.embeddings:
+            return area.embeddings[model_key]
+
+        sensor = area.params.sensor
+        total = area.num_tiles
+        vecs = []
+
+        for i in range(total):
+            tile_arr = area.tile_arrays[i].astype(np.float32)
+            if sensor == "Sentinel-2":
+                tile_arr = np.clip(tile_arr, 0, 1)
+
+            t_inputs = self._prepare_input(
+                tile_arr, area.tile_bounds[i], date_obj, sensor, resolution,
+                already_normalized=True,
+            )
+            t_emb = self.model.forward(
+                t_inputs['x'].to(self.device),
+                t_inputs['meta_info'].to(self.device),
+                t_inputs['wavelengths'],
+                t_inputs['bandwidths'],
+            )
+            t_vec = t_emb.detach().cpu()
+            t_vec = t_vec / t_vec.norm(dim=-1, keepdim=True)
+            vecs.append(t_vec.numpy().reshape(-1))
+
+            if progress_callback and ((i + 1) % 5 == 0 or i + 1 == total):
+                progress_callback(f"Embedding tile {i + 1}/{total}...")
+
+        area.embeddings[model_key] = np.stack(vecs, axis=0).astype(np.float32)
+        return area.embeddings[model_key]
+
+    def score_search_area(
+        self,
+        area: LoadedArea,
+        query_vec: torch.Tensor,
+        model_key: str = COPERNICUS_MODEL_KEY,
+    ) -> np.ndarray:
+        """Cosine similarity of every cached tile embedding against the query."""
+        embeddings = area.embeddings.get(model_key)
+        if embeddings is None:
+            raise ValueError(f"Area has no '{model_key}' embeddings — call embed_search_area() first.")
+
+        q = query_vec.detach().cpu().numpy().reshape(-1)
+        return embeddings @ q
+
+    def run_search(self,
+                   query_geom: Dict,
+                   search_geom: Optional[Dict] = None,
+                   start_date: str = None,
+                   end_date: str = None,
                    sensor: str = "Sentinel-2",
                    resolution: int = 10,
                    threshold: float = 0.5,
-                   progress_callback: Optional[Callable[[str], None]] = None) -> List[Dict]:
+                   progress_callback: Optional[Callable[[str], None]] = None,
+                   search_area: Optional[LoadedArea] = None) -> List[Dict]:
         """
         Run similarity search.
-        
+
         Args:
             query_geom: GeoJSON geometry for query
-            search_geom: GeoJSON geometry for search area
-            start_date, end_date: ISO strings
-            sensor: "Sentinel-2" or "Sentinel-1"
-            resolution: meters per pixel
+            search_geom: GeoJSON geometry for search area (ignored if search_area given)
+            start_date, end_date: ISO strings (defaulted from search_area if omitted)
+            sensor: "Sentinel-2" or "Sentinel-1" (overridden by search_area's sensor)
+            resolution: meters per pixel (overridden by search_area's resolution)
+            search_area: Optional LoadedArea — when given, the search side reuses
+                its cached tiles/embeddings instead of fetching+tiling a new grid.
+                Query side is always fetched fresh (it's a separate small patch).
         """
+        if search_area is not None:
+            sensor = search_area.params.sensor
+            resolution = search_area.params.resolution
+            start_date = start_date or search_area.params.start_date
+            end_date = end_date or search_area.params.end_date
         # Initialize GEE
         from data.gee_client import GEEClient
         GEEClient.initialize()
@@ -208,9 +288,56 @@ class CopernicusSearchPipeline:
         
         query_vec = query_emb.detach().cpu()
         query_vec = query_vec / query_vec.norm(dim=-1, keepdim=True)
-        
-        # 2. Process Search Area
-        # ----------------------
+
+        # 2. Process Search Area — area-cached path
+        # ------------------------------------------
+        if search_area is not None:
+            if progress_callback:
+                progress_callback(f"Embedding {search_area.num_tiles} cached tiles...")
+            self.embed_search_area(search_area, date_obj, resolution, progress_callback=progress_callback)
+            similarities = self.score_search_area(search_area, query_vec)
+
+            candidates = []
+            for i, score in enumerate(similarities):
+                if score < threshold:
+                    continue
+
+                t_bounds = search_area.tile_bounds[i]
+                tile_arr = search_area.tile_arrays[i].astype(np.float32)
+
+                display_img = None
+                try:
+                    if sensor == "Sentinel-2":
+                        display_img = get_rgb_visualization(np.clip(tile_arr, 0, 1), bands=bands_config.band_names)
+                    else:
+                        band0 = np.clip(tile_arr[0], 0, 1)
+                        gray = (band0 * 255).astype(np.uint8)
+                        display_img = np.stack([gray, gray, gray], axis=-1)
+                except Exception as e:
+                    print(f"Vis generation failed: {e}")
+
+                minx_t, miny_t, maxx_t, maxy_t = t_bounds
+                tile_geojson = {
+                    'type': 'Polygon',
+                    'coordinates': [[
+                        [minx_t, miny_t], [maxx_t, miny_t],
+                        [maxx_t, maxy_t], [minx_t, maxy_t],
+                        [minx_t, miny_t],
+                    ]],
+                }
+
+                candidates.append({
+                    'image': display_img,
+                    'geometry': tile_geojson,
+                    'score': float(score),
+                    'bounds': t_bounds,
+                })
+
+            from pipeline.postprocessing import nms_results
+            return nms_results(candidates)
+
+        # 2. Process Search Area — fetch path (no LoadedArea provided)
+        # --------------------------------------------------------------
         search_ee_geom = ee.Geometry(search_geom)
         search_comp = retriever.get_composite(search_ee_geom, start_date, end_date)
         if sensor == "Sentinel-1":
@@ -261,7 +388,12 @@ class CopernicusSearchPipeline:
                 
                 if np.max(tile_arr) == 0:
                     continue
-                    
+
+                # Skip tiles that are mostly masked/nodata (clouds, swath gaps,
+                # past the coastline): a valid pixel has any non-zero band.
+                if float(np.mean(np.any(tile_arr > 0, axis=0))) < 0.5:
+                    continue
+
                 # Prepare Inputs
                 t_inputs = self._prepare_input(
                     tile_arr,

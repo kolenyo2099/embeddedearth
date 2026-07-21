@@ -6,9 +6,16 @@ import io
 
 from models.dinov3 import DINOv3Wrapper
 
-def render_zero_shot_form():
+def render_zero_shot_form(area=None):
     """
     Render the Zero-Shot Object Detection form.
+
+    Args:
+        area: Optional LoadedArea (sidebar → Load & Embed Area). When given,
+            sensor/date pickers are hidden — the loaded area already fixes
+            them — and detection reuses its cached tiles/features instead of
+            fetching a new grid from GEE.
+
     Returns params object if search submitted, else None.
     """
     st.header("🎯 Zero-Shot Detection")
@@ -114,22 +121,31 @@ def render_zero_shot_form():
         return None
 
     st.markdown("---")
-    
+
     # 3. Search Parameters
     st.subheader("2. Search Parameters")
-    
+
     from datetime import datetime, timedelta
-    
-    sensor = st.selectbox("Sensor", ["Sentinel-2", "Sentinel-1"], index=0)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input("Start Date", datetime.now() - timedelta(days=30))
-    with col2:
-        end_date = st.date_input("End Date", datetime.now())
-        
+
+    if area is not None:
+        st.caption(
+            f"Searching **{area.name}** — {area.num_tiles} tiles · {area.params.sensor} · "
+            f"{area.params.start_date} to {area.params.end_date} (no GEE round trip)"
+        )
+        sensor = area.params.sensor
+        start_date = area.params.start_date
+        end_date = area.params.end_date
+    else:
+        sensor = st.selectbox("Sensor", ["Sentinel-2", "Sentinel-1"], index=0)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("Start Date", datetime.now() - timedelta(days=30))
+        with col2:
+            end_date = st.date_input("End Date", datetime.now())
+
     threshold = st.slider("Similarity Threshold", 0.0, 1.0, 0.65, 0.05)
-    
+
     # 4. Run Button
     if st.button("🚀 Run Detection", type="primary"):
         return {
@@ -141,5 +157,5 @@ def render_zero_shot_form():
             "token": st.session_state.hf_token,
             "submitted": True
         }
-        
+
     return None

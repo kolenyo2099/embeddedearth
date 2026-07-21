@@ -1,54 +1,52 @@
 """
 Search Form Component
 
-Accessible search form using st.form for batch submission,
-preventing page reloads on each input change.
+Accessible search form for query-time parameters only. Load-time parameters
+(dates, sensor, resolution, chip coverage) live in the area panel now — they
+identify a LoadedArea, not a search. top_k and similarity_threshold sit
+outside the form: with cached embeddings a rerun costs milliseconds, so
+these re-rank live against the cached similarity array.
 """
 
 import streamlit as st
-from datetime import datetime, timedelta
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
 import sys
 sys.path.insert(0, str(__file__).rsplit('/', 3)[0])
-from config import search_config, gee_config
+from config import search_config
 
 
 @dataclass
 class SearchParameters:
-    """Container for search form parameters."""
-    
+    """Container for search form parameters (query-time only)."""
+
     query: str = ""
-    sensor: str = "Sentinel-2" # "Sentinel-2" or "Sentinel-1"
     search_type: str = "text"  # "text" or "image"
     reference_image: Optional[bytes] = None
-    start_date: Optional[datetime] = None
-    end_date: Optional[datetime] = None
     top_k: int = 10
     similarity_threshold: float = 0.1  # matches search_config.similarity_threshold
-    resolution: float = 10.0
-    chip_size: int = 384
     submitted: bool = False
 
 
 def render_search_form(key_prefix: str = "search") -> SearchParameters:
     """
     Render the accessible search form.
-    
-    Uses st.form to batch all inputs and submit at once,
-    preventing focus loss on each change (WCAG 2.4.3).
-    
+
+    Search method/query/image are inside an st.form so they batch-submit;
+    top_k and similarity_threshold live outside it so dragging them re-ranks
+    already-cached results instantly instead of waiting for a submit click.
+
     Args:
         key_prefix: Prefix for form element keys.
-        
+
     Returns:
         SearchParameters with user inputs.
     """
     params = SearchParameters()
-    
+
     st.markdown("### 🔍 Search Parameters")
-        
+
     # Search type selector (Must be outside form to trigger rerun)
     search_type = st.radio(
         "Search Method",
@@ -57,16 +55,7 @@ def render_search_form(key_prefix: str = "search") -> SearchParameters:
         help="Search by describing what you're looking for, or upload a reference image."
     )
     params.search_type = "text" if search_type == "Text Query" else "image"
-    
-    # Sensor Selector
-    sensor = st.radio(
-        "Sensor",
-        options=["Sentinel-2", "Sentinel-1"],
-        horizontal=True,
-        help="Choose between Optical (Sentinel-2) or Radar (Sentinel-1) imagery."
-    )
-    params.sensor = sensor
-    
+
     # Text input OUTSIDE the form to prevent Enter key submission
     # The form will only submit when clicking the button
     if params.search_type == "text":
@@ -83,115 +72,52 @@ def render_search_form(key_prefix: str = "search") -> SearchParameters:
         )
         if uploaded_file:
             params.reference_image = uploaded_file.read()
-    
+
+    # Live re-rank controls: outside the form so changes take effect
+    # immediately against the cached similarity array (no re-encoding).
+    params.top_k = st.slider(
+        "Number of Results",
+        min_value=1,
+        max_value=50,
+        value=search_config.top_k,
+        key=f"{key_prefix}_top_k",
+        help="Maximum number of matching tiles to return."
+    )
+
+    threshold_pct = st.slider(
+        "Minimum Match Confidence (%)",
+        min_value=0,
+        max_value=100,
+        value=int(search_config.similarity_threshold * 100) if search_config.similarity_threshold else 10,
+        step=1,
+        format="%d%%",
+        key=f"{key_prefix}_threshold",
+        help="Minimum similarity percentage. Note: For satellite AI, >15% is often a strong match."
+    )
+    params.similarity_threshold = threshold_pct / 100.0
+
     with st.form(key=f"{key_prefix}_form"):
-        # st.markdown("### 🔍 Search Parameters") # Moved title up
-        
-        # Show what the user entered (read-only feedback)
         if params.search_type == "text" and params.query:
             st.info(f"🔍 Query: **{params.query}**")
-        
-        st.divider()
-        
-        # Date range
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            default_start = datetime.now() - timedelta(days=gee_config.default_days_back)
-            params.start_date = st.date_input(
-                "Start Date",
-                value=default_start,
-                help="Beginning of the date range for imagery."
-            )
-        
-        with col2:
-            params.end_date = st.date_input(
-                "End Date",
-                value=datetime.now(),
-                help="End of the date range for imagery."
-            )
-        
-        st.divider()
-        
-        # Advanced options in expander
-        with st.expander("⚙️ Advanced Options"):
-            params.top_k = st.slider(
-                "Number of Results",
-                min_value=1,
-                max_value=50,
-                value=search_config.top_k,
-                help="Maximum number of matching tiles to return."
-            )
-            
-            threshold_pct = st.slider(
-                "Minimum Match Confidence (%)",
-                min_value=0,
-                max_value=100,
-                value=int(search_config.similarity_threshold * 100) if search_config.similarity_threshold else 10,
-                step=1,
-                format="%d%%",
-                help="Minimum similarity percentage. Note: For satellite AI, >15% is often a strong match."
-            )
-            params.similarity_threshold = threshold_pct / 100.0
-            
-            st.markdown("#### 🔍 Search Resolution")
-            params.resolution = st.slider(
-                "Resolution (meters/pixel)",
-                min_value=10.0,
-                max_value=60.0,
-                value=10.0,
-                step=10.0,
-                help="Resolution in meters per pixel. 10m is standard Sentinel-2 (High Detail). Higher values (e.g. 20m, 60m) are faster but less detailed."
-            )
 
-            st.markdown("#### 🔬 Precision Tiling")
-            _CHIP_OPTIONS = {
-                "Broad – ~3.8km/chip (default, fast)": 384,
-                "Narrow – ~1.9km/chip (2× more tiles)": 192,
-                "Precise – ~960m/chip (4× more tiles)": 96,
-                "Ultra – ~480m/chip (8× more tiles)": 48,
-            }
-            tile_mode = st.selectbox(
-                "Chip Coverage",
-                options=list(_CHIP_OPTIONS.keys()),
-                index=0,
-                help=(
-                    "Controls how much geographic area each tile sent to the model covers. "
-                    "Smaller chips mean the model sees a smaller area per tile — better for finding "
-                    "small or local features (e.g. a single building, a small pond). Larger chips "
-                    "preserve scene context and are faster. Coverage shown is at 10m/px."
-                )
-            )
-            params.chip_size = _CHIP_OPTIONS[tile_mode]
-            if params.chip_size < 384:
-                approx_m = int(params.chip_size * params.resolution)
-                st.caption(
-                    f"Precision tiling active: each chip covers ~{approx_m}×{approx_m}m. "
-                    f"Downloaded at {params.chip_size}×{params.chip_size}px, upsampled to 384×384 for the model. "
-                    f"Expect more tiles and longer processing."
-                )
-        
-        st.divider()
-        
-        # Submit button
         submitted = st.form_submit_button(
             "🚀 Search",
             use_container_width=True,
             type="primary"
         )
-        
+
         params.submitted = submitted
-    
+
     return params
 
 
 def validate_search_params(params: SearchParameters) -> Tuple[bool, str]:
     """
     Validate search parameters.
-    
+
     Args:
         params: SearchParameters to validate.
-        
+
     Returns:
         Tuple of (is_valid, error_message).
     """
@@ -201,9 +127,5 @@ def validate_search_params(params: SearchParameters) -> Tuple[bool, str]:
     else:
         if params.reference_image is None:
             return False, "Please upload a reference image."
-    
-    if params.start_date and params.end_date:
-        if params.start_date > params.end_date:
-            return False, "Start date must be before end date."
-    
+
     return True, ""

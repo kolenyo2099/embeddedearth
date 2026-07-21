@@ -1,0 +1,13 @@
+# EmbeddedEarth — "Swiss data grid" theme.
+# Colors here drive Streamlit's native widget theming; app/theme.py layers on
+# the grid, typography, zero-radius, and numbered-section structure.
+[theme]
+base = "light"
+primaryColor = "#DA2818"
+backgroundColor = "#FAFAF8"
+secondaryBackgroundColor = "#F2F1EC"
+textColor = "#171714"
+
+[server]
+# Pick up code edits without a manual restart during development.
+runOnSave = true

@@ -22,15 +22,22 @@ def render_result_grid(
     results: List[dict],
     show_heatmaps: bool = True,
     columns: int = None,
-    key_prefix: str = "res"
+    key_prefix: str = "res",
+    area_id: Optional[str] = None,
+    query: Optional[str] = None,
+    threshold: Optional[float] = None,
 ):
     """
     Render search results in an accessible grid with export capabilities.
+
+    area_id/query/threshold feed the result-signature reset only — switching
+    areas or re-running the same query at a different threshold must clear
+    stale selections even if the score tuple happens to collide.
     """
     if not results:
         st.info("No results to display. Try a different query or expand your search area.")
         return
-    
+
     columns = columns or ui_config.results_per_row
 
     # --- State Management for Selection ---
@@ -39,7 +46,10 @@ def render_result_grid(
     # (the indices would silently point at different tiles).
     selection_key = f"{key_prefix}_selection"
     signature_key = f"{key_prefix}_results_signature"
-    signature = (len(results), tuple(round(r.get('score', 0.0), 6) for r in results))
+    signature = (
+        area_id, query, threshold,
+        len(results), tuple(round(r.get('score', 0.0), 6) for r in results),
+    )
 
     if st.session_state.get(signature_key) != signature:
         st.session_state[signature_key] = signature
@@ -248,7 +258,7 @@ def _render_result_card(
     # Controls Row: Score
     c1, c2 = st.columns([1, 1])
     with c1:
-        score_color = _get_score_color(score, high_scale)
+        score_color = get_score_color(score, high_scale)
         st.markdown(
             f'<div style="background-color: {score_color}; padding: 4px; border-radius: 4px; color: white;">{score:.1%}</div>',
             unsafe_allow_html=True
@@ -291,7 +301,7 @@ def _render_result_card(
         _download_result(image, index, key_prefix)
 
 
-def _get_score_color(score: float, high_scale: bool = False) -> str:
+def get_score_color(score: float, high_scale: bool = False) -> str:
     """
     Get color based on similarity score.
 
